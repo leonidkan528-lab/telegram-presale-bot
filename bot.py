@@ -83,7 +83,9 @@ services = [
 main_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🔍 Подобрать услугу"), KeyboardButton(text="📊 Все услуги")],
-        [KeyboardButton(text="💰 Цены и сроки"), KeyboardButton(text="👨‍💼 Связаться с менеджером")],
+        [KeyboardButton(text="💰 Цены и сроки"), KeyboardButton(text="❓ FAQ")],
+        [KeyboardButton(text="📝 Оставить заявку"), KeyboardButton(text="👨‍💼 Связаться с менеджером")],
+        [KeyboardButton(text="❌ Отменить")]
     ],
     resize_keyboard=True
 )
@@ -103,12 +105,15 @@ services_kb = ReplyKeyboardMarkup(
 
 def find_service(text: str):
     text = text.lower().strip()
+
     for service in services:
         if service["name"].lower() == text:
             return service
+
         for alias in service["aliases"]:
             if alias in text:
                 return service
+
     return None
 
 
@@ -129,6 +134,15 @@ async def handle_message(message: types.Message):
     text = (message.text or "").strip()
     text_lower = text.lower()
 
+    if text == "❌ Отменить":
+        user_states[user_id] = None
+        user_leads[user_id] = {}
+        await message.answer(
+            "Ок, отменил текущий сценарий. Можете выбрать действие в меню.",
+            reply_markup=main_kb
+        )
+        return
+
     if text == "/start" or text == "⬅️ В главное меню":
         user_states[user_id] = None
         await message.answer(
@@ -148,9 +162,33 @@ async def handle_message(message: types.Message):
 
     if text == "💰 Цены и сроки":
         msg = "💰 <b>Цены и сроки по услугам:</b>\n\n"
+
         for s in services:
             msg += f"• <b>{s['name']}</b> — {s['price']}, {s['time']}\n"
-        await message.answer(msg, parse_mode="HTML", reply_markup=main_kb)
+
+        await message.answer(
+            msg,
+            parse_mode="HTML",
+            reply_markup=main_kb
+        )
+        return
+
+    if text == "❓ FAQ":
+        await message.answer(
+            "❓ <b>Частые вопросы</b>\n\n"
+            "<b>1. Можно ли оценить эффективность рекламы?</b>\n"
+            "Да. В зависимости от задачи подойдёт Brand Lift, конверсионный анализ, доходимость или OOH/TV-аналитика.\n\n"
+            "<b>2. Что нужно для старта?</b>\n"
+            "Обычно нужны период кампании, описание аудитории, каналы размещения и цель исследования.\n\n"
+            "<b>3. Можно ли оценить офлайн-точки?</b>\n"
+            "Да, для этого подходит доходимость или тепловая карта.\n\n"
+            "<b>4. Можно ли сравнить себя с конкурентами?</b>\n"
+            "Да, для этого есть анализ конкурентов.\n\n"
+            "<b>5. Если я не знаю, какая услуга нужна?</b>\n"
+            "Нажмите «🔍 Подобрать услугу» и опишите задачу своими словами.",
+            parse_mode="HTML",
+            reply_markup=main_kb
+        )
         return
 
     if text == "🔍 Подобрать услугу":
@@ -166,10 +204,13 @@ async def handle_message(message: types.Message):
         )
         return
 
-    if text == "👨‍💼 Связаться с менеджером":
+    if text in ["👨‍💼 Связаться с менеджером", "📝 Оставить заявку"]:
         user_states[user_id] = "lead_name"
         user_leads[user_id] = {}
-        await message.answer("Как вас зовут?")
+        await message.answer(
+            "Давайте быстро соберём заявку, чтобы менеджер сразу понял контекст.\n\n"
+            "Как вас зовут?"
+        )
         return
 
     if user_states.get(user_id) == "lead_name":
@@ -271,9 +312,13 @@ async def handle_message(message: types.Message):
         return
 
     await message.answer(
-        "Я не до конца понял запрос.\n\n"
-        "Можете выбрать действие в меню или написать задачу проще: "
-        "например, «оценить продажи после рекламы» или «понять аудиторию бренда».",
+        "Я пока не понял, какую именно задачу нужно решить.\n\n"
+        "Можете написать проще, например:\n"
+        "— хочу оценить наружную рекламу\n"
+        "— нужно понять аудиторию бренда\n"
+        "— хочу проверить, выросли ли продажи после рекламы\n"
+        "— нужно понять, где живёт аудитория\n\n"
+        "Или нажмите «🔍 Подобрать услугу».",
         reply_markup=main_kb
     )
 
