@@ -13,6 +13,8 @@ dp = Dispatcher()
 user_states = {}
 user_leads = {}
 
+MTS_LINK_URL = "https://mts.mts-link.ru/j/164981661/18742977822/stream-new/17925578984"
+
 services = [
     {
         "name": "Brand Lift",
@@ -84,6 +86,7 @@ main_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🔍 Подобрать услугу"), KeyboardButton(text="📊 Все услуги")],
         [KeyboardButton(text="💰 Цены и сроки"), KeyboardButton(text="❓ FAQ")],
+        [KeyboardButton(text="📅 Записаться на консультацию")],
         [KeyboardButton(text="📝 Оставить заявку"), KeyboardButton(text="👨‍💼 Связаться с менеджером")],
         [KeyboardButton(text="❌ Отменить")]
     ],
@@ -146,9 +149,15 @@ async def handle_message(message: types.Message):
     if text == "/start" or text == "⬅️ В главное меню":
         user_states[user_id] = None
         await message.answer(
-            "Привет! Я помогу подобрать аналитический продукт под вашу задачу.\n\n"
-            "Можно выбрать услугу из меню или описать задачу своими словами: "
-            "например, «хочу оценить наружную рекламу» или «нужно понять аудиторию бренда».",
+            "👋 Привет! Я помогу подобрать аналитический продукт под вашу задачу.\n\n"
+            "Могу помочь с:\n"
+            "📊 оценкой эффективности рекламы\n"
+            "📍 анализом офлайн-трафика и доходимости\n"
+            "🎯 портретом аудитории\n"
+            "🏙 аналитикой наружной рекламы\n"
+            "📺 ТВ-аналитикой\n"
+            "⚔ сравнением с конкурентами\n\n"
+            "Выберите действие ниже или опишите задачу своими словами.",
             reply_markup=main_kb
         )
         return
@@ -188,6 +197,32 @@ async def handle_message(message: types.Message):
             "Нажмите «🔍 Подобрать услугу» и опишите задачу своими словами.",
             parse_mode="HTML",
             reply_markup=main_kb
+        )
+        return
+
+    if text == "📅 Записаться на консультацию":
+        await message.answer(
+            "📅 <b>Запись на консультацию</b>\n\n"
+            "Вы можете выбрать удобное время для встречи в МТС Линк.\n\n"
+            "На консультации менеджер поможет:\n"
+            "— уточнить бизнес-задачу\n"
+            "— подобрать подходящее аналитическое решение\n"
+            "— сориентировать по срокам и стоимости\n"
+            "— подсказать, какие данные нужны для старта\n\n"
+            f"Ссылка на запись:\n{MTS_LINK_URL}\n\n"
+            "После записи можете сразу написать сюда задачу — я передам её менеджеру заранее.",
+            parse_mode="HTML",
+            reply_markup=main_kb
+        )
+
+        username = message.from_user.username or "без username"
+
+        await bot.send_message(
+            ADMIN_ID,
+            f"📅 <b>Пользователь открыл запись на консультацию</b>\n\n"
+            f"От: @{username}\n"
+            f"Telegram ID: {user_id}",
+            parse_mode="HTML"
         )
         return
 
