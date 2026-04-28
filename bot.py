@@ -1,11 +1,11 @@
 import asyncio
+import os
+import json
 from datetime import datetime
 
 import gspread
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-
-import os
 
 TOKEN = "7975259132:AAHa5mxmASaF1-qfKjiOJvwfubCmbQ-2BKU"
 ADMIN_ID = 237014151
@@ -18,9 +18,6 @@ user_leads = {}
 
 MTS_LINK_URL = "https://mts.mts-link.ru/j/164981661/18742977822/stream-new/17925578984"
 GOOGLE_SHEET_NAME = "Telegram Leads"
-
-gc = gspread.service_account(filename="google_credentials.json")
-sheet = gc.open(GOOGLE_SHEET_NAME).sheet1
 
 services = [
     {
@@ -114,15 +111,32 @@ services_kb = ReplyKeyboardMarkup(
 
 
 def save_lead_to_google_sheets(lead, username, user_id):
-    sheet.append_row([
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        lead.get("name", ""),
-        lead.get("company", ""),
-        lead.get("task", ""),
-        lead.get("contact", ""),
-        username,
-        str(user_id)
-    ])
+    try:
+        google_creds_raw = os.getenv("GOOGLE_CREDENTIALS")
+
+        if not google_creds_raw:
+            return "⚠️ GOOGLE_CREDENTIALS не найден в Render Environment"
+
+        google_creds = json.loads(google_creds_raw)
+
+        gc = gspread.service_account_from_dict(google_creds)
+        sheet = gc.open(GOOGLE_SHEET_NAME).sheet1
+
+        sheet.append_row([
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            lead.get("name", ""),
+            lead.get("company", ""),
+            lead.get("task", ""),
+            lead.get("contact", ""),
+            username,
+            str(user_id)
+        ])
+
+        return "✅ сохранена в Google Sheets"
+
+    except Exception as e:
+        print(f"Google Sheets error: {e}")
+        return f"⚠️ ошибка Google Sheets: {e}"
 
 
 def find_service(text: str):
@@ -284,11 +298,7 @@ async def handle_message(message: types.Message):
         username = message.from_user.username or "без username"
         lead = user_leads[user_id]
 
-        try:
-            save_lead_to_google_sheets(lead, username, user_id)
-            sheet_status = "✅ сохранена в Google Sheets"
-        except Exception as e:
-            sheet_status = f"⚠️ не сохранилась в Google Sheets: {e}"
+        sheet_status = save_lead_to_google_sheets(lead, username, user_id)
 
         await message.answer(
             "Спасибо! Передал заявку менеджеру.\n\n"
@@ -379,7 +389,7 @@ async def handle_message(message: types.Message):
 
 async def main():
     if not TOKEN:
-        raise ValueError("BOT_TOKEN не найден. Добавьте его в Render Environment Variables.")
+        raise ValueError("BOT_TOKEN не найден.")
 
     await dp.start_polling(bot)
 
