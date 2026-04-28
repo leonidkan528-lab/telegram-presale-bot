@@ -1,4 +1,7 @@
 import asyncio
+from datetime import datetime
+
+import gspread
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
@@ -13,7 +16,11 @@ dp = Dispatcher()
 user_states = {}
 user_leads = {}
 
-MTS_LINK_URL = "https://mts.mts-link.ru/j/164981661/18742977822/stream-new/17925578984"
+MTS_LINK_URL = "https://mts-link.ru/ТВОЯ_ССЫЛКА"
+GOOGLE_SHEET_NAME = "Telegram Leads"
+
+gc = gspread.service_account(filename="google_credentials.json")
+sheet = gc.open(GOOGLE_SHEET_NAME).sheet1
 
 services = [
     {
@@ -106,6 +113,18 @@ services_kb = ReplyKeyboardMarkup(
 )
 
 
+def save_lead_to_google_sheets(lead, username, user_id):
+    sheet.append_row([
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        lead.get("name", ""),
+        lead.get("company", ""),
+        lead.get("task", ""),
+        lead.get("contact", ""),
+        username,
+        str(user_id)
+    ])
+
+
 def find_service(text: str):
     text = text.lower().strip()
 
@@ -163,10 +182,7 @@ async def handle_message(message: types.Message):
         return
 
     if text == "📊 Все услуги":
-        await message.answer(
-            "Выберите услугу из списка ниже:",
-            reply_markup=services_kb
-        )
+        await message.answer("Выберите услугу из списка ниже:", reply_markup=services_kb)
         return
 
     if text == "💰 Цены и сроки":
@@ -175,11 +191,7 @@ async def handle_message(message: types.Message):
         for s in services:
             msg += f"• <b>{s['name']}</b> — {s['price']}, {s['time']}\n"
 
-        await message.answer(
-            msg,
-            parse_mode="HTML",
-            reply_markup=main_kb
-        )
+        await message.answer(msg, parse_mode="HTML", reply_markup=main_kb)
         return
 
     if text == "❓ FAQ":
@@ -272,6 +284,12 @@ async def handle_message(message: types.Message):
         username = message.from_user.username or "без username"
         lead = user_leads[user_id]
 
+        try:
+            save_lead_to_google_sheets(lead, username, user_id)
+            sheet_status = "✅ сохранена в Google Sheets"
+        except Exception as e:
+            sheet_status = f"⚠️ не сохранилась в Google Sheets: {e}"
+
         await message.answer(
             "Спасибо! Передал заявку менеджеру.\n\n"
             "Он сможет вернуться уже с пониманием вашей задачи.",
@@ -285,7 +303,8 @@ async def handle_message(message: types.Message):
             f"🏢 Компания: {lead.get('company')}\n"
             f"📌 Задача: {lead.get('task')}\n"
             f"☎️ Контакт: {lead.get('contact')}\n"
-            f"🔗 Telegram: @{username}",
+            f"🔗 Telegram: @{username}\n"
+            f"🧾 Таблица: {sheet_status}",
             parse_mode="HTML"
         )
 
