@@ -16,7 +16,7 @@ dp = Dispatcher()
 user_states = {}
 user_leads = {}
 
-MTS_LINK_URL = "https://mts-link.ru/ТВОЯ_ССЫЛКА"
+MTS_LINK_URL = "https://mts.mts-link.ru/j/164981661/18742977822/stream-new/17925578984"
 GOOGLE_SHEET_NAME = "Telegram Leads"
 
 gc = gspread.service_account(filename="google_credentials.json")
