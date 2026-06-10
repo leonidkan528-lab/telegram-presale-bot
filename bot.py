@@ -5,7 +5,7 @@ from datetime import datetime
 
 import gspread
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, FSInputFile
 
 
 TOKEN = "7975259132:AAHa5mxmASaF1-qfKjiOJvwfubCmbQ-2BKU"
@@ -19,6 +19,13 @@ user_leads = {}
 
 MTS_LINK_URL = "https://mts.mts-link.ru/j/164981661/18742977822/stream-new/17925578984"
 GOOGLE_SHEET_NAME = "Telegram Leads"
+MATERIALS = [
+    {
+        "title": "Sales Kit Research",
+        "path": "materials/sales_kit_research.pdf",
+        "caption": "📎 Sales Kit Research — материалы по исследовательским продуктам МТС Ads"
+    }
+]
 
 
 services = [
@@ -94,6 +101,7 @@ main_kb = ReplyKeyboardMarkup(
         [KeyboardButton(text="📅 Записаться на консультацию")],
         [KeyboardButton(text="🔍 Подобрать услугу"), KeyboardButton(text="📊 Все услуги")],
         [KeyboardButton(text="💰 Цены и сроки"), KeyboardButton(text="❓ FAQ")],
+        [KeyboardButton(text="📎 Получить материалы")],
         [KeyboardButton(text="📝 Оставить заявку"), KeyboardButton(text="👨‍💼 Связаться с менеджером")],
         [KeyboardButton(text="❌ Отменить")]
     ],
@@ -268,7 +276,38 @@ async def handle_message(message: types.Message):
             reply_markup=main_kb
         )
         return
+    
+    if text == "📎 Получить материалы":
+        await message.answer(
+            "📎 Отправляю материалы по исследовательским продуктам МТС Ads.\n\n"
+            "После просмотра можете нажать «📝 Оставить заявку» или «📅 Записаться на консультацию».",
+            reply_markup=main_kb
+        )
 
+        for material in MATERIALS:
+            try:
+                document = FSInputFile(material["path"])
+                await message.answer_document(
+                    document=document,
+                    caption=material["caption"]
+                )
+            except Exception as e:
+                await message.answer(
+                    f"⚠️ Не удалось отправить файл: {material['title']}\n"
+                    f"Ошибка: {e}"
+                )
+
+        username = message.from_user.username or "без username"
+
+        await bot.send_message(
+            ADMIN_ID,
+            f"📎 <b>Пользователь запросил материалы</b>\n\n"
+            f"От: @{username}\n"
+            f"Telegram ID: {user_id}",
+            parse_mode="HTML"
+        )
+        return
+    
     if text == "📅 Записаться на консультацию":
         await message.answer(
             "📅 <b>Запись на консультацию</b>\n\n"
