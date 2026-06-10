@@ -7,8 +7,9 @@ import gspread
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
-TOKEN = "7975259132:AAHa5mxmASaF1-qfKjiOJvwfubCmbQ-2BKU"
-ADMIN_ID = 237014151
+
+TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "237014151"))
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
@@ -18,6 +19,7 @@ user_leads = {}
 
 MTS_LINK_URL = "https://mts.mts-link.ru/j/164981661/18742977822/stream-new/17925578984"
 GOOGLE_SHEET_NAME = "Telegram Leads"
+
 
 services = [
     {
@@ -86,16 +88,18 @@ services = [
     }
 ]
 
+
 main_kb = ReplyKeyboardMarkup(
     keyboard=[
+        [KeyboardButton(text="📅 Записаться на консультацию")],
         [KeyboardButton(text="🔍 Подобрать услугу"), KeyboardButton(text="📊 Все услуги")],
         [KeyboardButton(text="💰 Цены и сроки"), KeyboardButton(text="❓ FAQ")],
-        [KeyboardButton(text="📅 Записаться на консультацию")],
         [KeyboardButton(text="📝 Оставить заявку"), KeyboardButton(text="👨‍💼 Связаться с менеджером")],
         [KeyboardButton(text="❌ Отменить")]
     ],
     resize_keyboard=True
 )
+
 
 services_kb = ReplyKeyboardMarkup(
     keyboard=[
@@ -105,6 +109,34 @@ services_kb = ReplyKeyboardMarkup(
         [KeyboardButton(text="Аналитика наружной рекламы")],
         [KeyboardButton(text="ТВ-аналитика")],
         [KeyboardButton(text="⬅️ В главное меню")]
+    ],
+    resize_keyboard=True
+)
+
+
+role_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🏢 Рекламодатель")],
+        [KeyboardButton(text="🤝 Агентство")],
+        [KeyboardButton(text="📈 Маркетолог")],
+        [KeyboardButton(text="📊 Аналитик")],
+        [KeyboardButton(text="❓ Другое")],
+        [KeyboardButton(text="❌ Отменить")]
+    ],
+    resize_keyboard=True
+)
+
+
+interest_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📍 Доходимость")],
+        [KeyboardButton(text="📊 Brand Lift")],
+        [KeyboardButton(text="📈 Конверсионный анализ")],
+        [KeyboardButton(text="🎯 Профилирование")],
+        [KeyboardButton(text="🏙 Наружная реклама")],
+        [KeyboardButton(text="📺 ТВ-аналитика")],
+        [KeyboardButton(text="🤔 Пока не знаю")],
+        [KeyboardButton(text="❌ Отменить")]
     ],
     resize_keyboard=True
 )
@@ -126,6 +158,8 @@ def save_lead_to_google_sheets(lead, username, user_id):
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             lead.get("name", ""),
             lead.get("company", ""),
+            lead.get("role", ""),
+            lead.get("interest", ""),
             lead.get("task", ""),
             lead.get("contact", ""),
             username,
@@ -173,6 +207,7 @@ async def handle_message(message: types.Message):
     if text == "❌ Отменить":
         user_states[user_id] = None
         user_leads[user_id] = {}
+
         await message.answer(
             "Ок, отменил текущий сценарий. Можете выбрать действие в меню.",
             reply_markup=main_kb
@@ -181,6 +216,7 @@ async def handle_message(message: types.Message):
 
     if text == "/start" or text == "⬅️ В главное меню":
         user_states[user_id] = None
+
         await message.answer(
             "👋 Привет! Я помогу подобрать аналитический продукт под вашу задачу.\n\n"
             "Могу помочь с:\n"
@@ -196,7 +232,10 @@ async def handle_message(message: types.Message):
         return
 
     if text == "📊 Все услуги":
-        await message.answer("Выберите услугу из списка ниже:", reply_markup=services_kb)
+        await message.answer(
+            "Выберите услугу из списка ниже:",
+            reply_markup=services_kb
+        )
         return
 
     if text == "💰 Цены и сроки":
@@ -205,7 +244,11 @@ async def handle_message(message: types.Message):
         for s in services:
             msg += f"• <b>{s['name']}</b> — {s['price']}, {s['time']}\n"
 
-        await message.answer(msg, parse_mode="HTML", reply_markup=main_kb)
+        await message.answer(
+            msg,
+            parse_mode="HTML",
+            reply_markup=main_kb
+        )
         return
 
     if text == "❓ FAQ":
@@ -254,6 +297,7 @@ async def handle_message(message: types.Message):
 
     if text == "🔍 Подобрать услугу":
         user_states[user_id] = "selection"
+
         await message.answer(
             "Опишите задачу в одном сообщении.\n\n"
             "Например:\n"
@@ -268,6 +312,7 @@ async def handle_message(message: types.Message):
     if text in ["👨‍💼 Связаться с менеджером", "📝 Оставить заявку"]:
         user_states[user_id] = "lead_name"
         user_leads[user_id] = {}
+
         await message.answer(
             "Давайте быстро соберём заявку, чтобы менеджер сразу понял контекст.\n\n"
             "Как вас зовут?"
@@ -277,19 +322,46 @@ async def handle_message(message: types.Message):
     if user_states.get(user_id) == "lead_name":
         user_leads[user_id]["name"] = text
         user_states[user_id] = "lead_company"
+
         await message.answer("Из какой вы компании?")
         return
 
     if user_states.get(user_id) == "lead_company":
         user_leads[user_id]["company"] = text
+        user_states[user_id] = "lead_role"
+
+        await message.answer(
+            "Кто вы?",
+            reply_markup=role_kb
+        )
+        return
+
+    if user_states.get(user_id) == "lead_role":
+        user_leads[user_id]["role"] = text
+        user_states[user_id] = "lead_interest"
+
+        await message.answer(
+            "Какой продукт интересует больше всего?",
+            reply_markup=interest_kb
+        )
+        return
+
+    if user_states.get(user_id) == "lead_interest":
+        user_leads[user_id]["interest"] = text
         user_states[user_id] = "lead_task"
-        await message.answer("Кратко опишите задачу: что хотите измерить или проанализировать?")
+
+        await message.answer(
+            "Кратко опишите задачу: что хотите измерить или проанализировать?"
+        )
         return
 
     if user_states.get(user_id) == "lead_task":
         user_leads[user_id]["task"] = text
         user_states[user_id] = "lead_contact"
-        await message.answer("Как с вами удобнее связаться? Можно оставить Telegram, телефон или email.")
+
+        await message.answer(
+            "Как с вами удобнее связаться? Можно оставить Telegram, телефон или email."
+        )
         return
 
     if user_states.get(user_id) == "lead_contact":
@@ -311,6 +383,8 @@ async def handle_message(message: types.Message):
             f"🔥 <b>Новая заявка из Telegram-бота</b>\n\n"
             f"👤 Имя: {lead.get('name')}\n"
             f"🏢 Компания: {lead.get('company')}\n"
+            f"👔 Роль: {lead.get('role')}\n"
+            f"🎯 Интерес: {lead.get('interest')}\n"
             f"📌 Задача: {lead.get('task')}\n"
             f"☎️ Контакт: {lead.get('contact')}\n"
             f"🔗 Telegram: @{username}\n"
@@ -366,6 +440,7 @@ async def handle_message(message: types.Message):
             )
 
             username = message.from_user.username or "без username"
+
             await bot.send_message(
                 ADMIN_ID,
                 f"❗ <b>Нераспознанный запрос на подбор услуги</b>\n\n"
@@ -373,6 +448,7 @@ async def handle_message(message: types.Message):
                 f"Текст: {text}",
                 parse_mode="HTML"
             )
+
         return
 
     await message.answer(
@@ -389,7 +465,7 @@ async def handle_message(message: types.Message):
 
 async def main():
     if not TOKEN:
-        raise ValueError("BOT_TOKEN не найден.")
+        raise ValueError("BOT_TOKEN не найден. Добавьте BOT_TOKEN в Render Environment Variables.")
 
     await dp.start_polling(bot)
 
