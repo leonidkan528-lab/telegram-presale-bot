@@ -11,6 +11,9 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, FSInputFile
 TOKEN = "7975259132:AAHa5mxmASaF1-qfKjiOJvwfubCmbQ-2BKU"
 ADMIN_ID = 237014151
 
+if not TOKEN:
+    raise ValueError("BOT_TOKEN не найден. Добавьте BOT_TOKEN в Render Environment Variables.")
+
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
@@ -19,6 +22,7 @@ user_leads = {}
 
 MTS_LINK_URL = "https://mts.mts-link.ru/j/164981661/18742977822/stream-new/17925578984"
 GOOGLE_SHEET_NAME = "Telegram Leads"
+
 MATERIALS = [
     {
         "title": "Sales Kit Research",
@@ -98,16 +102,51 @@ services = [
 
 main_kb = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="📅 Записаться на консультацию")],
-        [KeyboardButton(text="🔍 Подобрать услугу"), KeyboardButton(text="📊 Все услуги")],
-        [KeyboardButton(text="💰 Цены и сроки"), KeyboardButton(text="❓ FAQ")],
-        [KeyboardButton(text="📎 Получить материалы")],
-        [KeyboardButton(text="📝 Оставить заявку"), KeyboardButton(text="👨‍💼 Связаться с менеджером")],
-        [KeyboardButton(text="❌ Отменить")]
+        [KeyboardButton(text="🔍 Подобрать решение")],
+        [KeyboardButton(text="📎 Материалы"), KeyboardButton(text="📅 Консультация")],
+        [KeyboardButton(text="📝 Оставить заявку")],
+        [KeyboardButton(text="ℹ️ Помощь")]
     ],
     resize_keyboard=True
 )
 
+solution_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🧭 Подбор по задаче")],
+        [KeyboardButton(text="📊 Все услуги"), KeyboardButton(text="💰 Цены и сроки")],
+        [KeyboardButton(text="🆚 Сравнить продукты"), KeyboardButton(text="❓ FAQ по продуктам")],
+        [KeyboardButton(text="⬅️ В главное меню")]
+    ],
+    resize_keyboard=True
+)
+
+materials_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📎 Получить Sales Kit")],
+        [KeyboardButton(text="📚 Что внутри материалов")],
+        [KeyboardButton(text="⬅️ В главное меню")]
+    ],
+    resize_keyboard=True
+)
+
+consultation_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📅 Записаться в MTS Link")],
+        [KeyboardButton(text="📝 Передать задачу заранее")],
+        [KeyboardButton(text="⬅️ В главное меню")]
+    ],
+    resize_keyboard=True
+)
+
+help_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="⚙️ Как проходит исследование")],
+        [KeyboardButton(text="❓ Частые вопросы")],
+        [KeyboardButton(text="👨‍💼 Связаться с менеджером")],
+        [KeyboardButton(text="⬅️ В главное меню")]
+    ],
+    resize_keyboard=True
+)
 
 services_kb = ReplyKeyboardMarkup(
     keyboard=[
@@ -121,7 +160,6 @@ services_kb = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-
 role_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🏢 Рекламодатель")],
@@ -133,7 +171,6 @@ role_kb = ReplyKeyboardMarkup(
     ],
     resize_keyboard=True
 )
-
 
 interest_kb = ReplyKeyboardMarkup(
     keyboard=[
@@ -202,8 +239,13 @@ def service_card(service):
         f"✅ Подходит, {service['best_for']}\n\n"
         f"💰 <b>Стоимость:</b> {service['price']}\n"
         f"⏱ <b>Срок:</b> {service['time']}\n\n"
-        f"Можете выбрать другую услугу или оставить заявку менеджеру."
+        f"Можете оставить заявку или записаться на консультацию."
     )
+
+
+def start_lead_flow(user_id):
+    user_states[user_id] = "lead_name"
+    user_leads[user_id] = {}
 
 
 @dp.message()
@@ -217,7 +259,7 @@ async def handle_message(message: types.Message):
         user_leads[user_id] = {}
 
         await message.answer(
-            "Ок, отменил текущий сценарий. Можете выбрать действие в меню.",
+            "Ок, отменил текущий сценарий. Возвращаю в главное меню.",
             reply_markup=main_kb
         )
         return
@@ -226,16 +268,64 @@ async def handle_message(message: types.Message):
         user_states[user_id] = None
 
         await message.answer(
-            "👋 Привет! Я помогу подобрать аналитический продукт под вашу задачу.\n\n"
-            "Могу помочь с:\n"
-            "📊 оценкой эффективности рекламы\n"
-            "📍 анализом офлайн-трафика и доходимости\n"
-            "🎯 портретом аудитории\n"
-            "🏙 аналитикой наружной рекламы\n"
-            "📺 ТВ-аналитикой\n"
-            "⚔ сравнением с конкурентами\n\n"
-            "Выберите действие ниже или опишите задачу своими словами.",
+            "👋 Привет! Я помогу подобрать исследовательское решение МТС Ads под вашу задачу.\n\n"
+            "Выберите, что вам нужно:\n\n"
+            "🔍 подобрать решение\n"
+            "📎 получить материалы\n"
+            "📅 записаться на консультацию\n"
+            "📝 оставить заявку\n"
+            "ℹ️ узнать, как всё работает",
             reply_markup=main_kb
+        )
+        return
+
+    if text == "🔍 Подобрать решение":
+        await message.answer(
+            "🔍 Раздел подбора решения.\n\n"
+            "Можно посмотреть все продукты, сравнить их, узнать цены или описать задачу — я подскажу подходящий вариант.",
+            reply_markup=solution_kb
+        )
+        return
+
+    if text == "📎 Материалы":
+        await message.answer(
+            "📎 Раздел материалов.\n\n"
+            "Здесь можно получить Sales Kit и кратко посмотреть, что внутри.",
+            reply_markup=materials_kb
+        )
+        return
+
+    if text == "📅 Консультация":
+        await message.answer(
+            "📅 Раздел консультации.\n\n"
+            "Можно сразу записаться в MTS Link или передать задачу менеджеру заранее.",
+            reply_markup=consultation_kb
+        )
+        return
+
+    if text == "ℹ️ Помощь":
+        await message.answer(
+            "ℹ️ Раздел помощи.\n\n"
+            "Здесь можно узнать, как проходит исследование, посмотреть частые вопросы или связаться с менеджером.",
+            reply_markup=help_kb
+        )
+        return
+
+    if text == "📝 Оставить заявку":
+        start_lead_flow(user_id)
+
+        await message.answer(
+            "Давайте быстро соберём заявку, чтобы менеджер сразу понял контекст.\n\n"
+            "Как вас зовут?"
+        )
+        return
+
+    if text == "📝 Передать задачу заранее" or text == "👨‍💼 Связаться с менеджером":
+        start_lead_flow(user_id)
+
+        await message.answer(
+            "Хорошо, передадим задачу менеджеру.\n\n"
+            "Как вас зовут?"
         )
         return
 
@@ -255,11 +345,25 @@ async def handle_message(message: types.Message):
         await message.answer(
             msg,
             parse_mode="HTML",
-            reply_markup=main_kb
+            reply_markup=solution_kb
         )
         return
 
-    if text == "❓ FAQ":
+    if text == "🆚 Сравнить продукты":
+        await message.answer(
+            "🆚 <b>Короткое сравнение продуктов</b>\n\n"
+            "<b>Brand Lift</b> — если нужно понять узнаваемость, запоминаемость и отношение к бренду.\n\n"
+            "<b>Конверсионный анализ</b> — если нужно оценить влияние рекламы на продажи, заявки, звонки или действия на сайте.\n\n"
+            "<b>Доходимость</b> — если нужно понять, дошли ли пользователи до офлайн-точек после контакта с рекламой.\n\n"
+            "<b>Профилирование</b> — если нужно узнать портрет аудитории: пол, возраст, интересы, гео и другие признаки.\n\n"
+            "<b>Аналитика наружной рекламы</b> — если нужно оценить эффективность OOH/DOOH-размещений.\n\n"
+            "<b>ТВ-аналитика</b> — если нужно оценить охват и эффект ТВ-размещений.",
+            parse_mode="HTML",
+            reply_markup=solution_kb
+        )
+        return
+
+    if text == "❓ FAQ по продуктам" or text == "❓ Частые вопросы":
         await message.answer(
             "❓ <b>Частые вопросы</b>\n\n"
             "<b>1. Можно ли оценить эффективность рекламы?</b>\n"
@@ -271,17 +375,49 @@ async def handle_message(message: types.Message):
             "<b>4. Можно ли сравнить себя с конкурентами?</b>\n"
             "Да, для этого есть анализ конкурентов.\n\n"
             "<b>5. Если я не знаю, какая услуга нужна?</b>\n"
-            "Нажмите «🔍 Подобрать услугу» и опишите задачу своими словами.",
+            "Нажмите «🧭 Подбор по задаче» и опишите задачу своими словами.",
             parse_mode="HTML",
-            reply_markup=main_kb
+            reply_markup=help_kb
         )
         return
-    
-    if text == "📎 Получить материалы":
+
+    if text == "⚙️ Как проходит исследование":
+        await message.answer(
+            "⚙️ <b>Как обычно проходит исследование</b>\n\n"
+            "1. Уточняем бизнес-задачу клиента.\n"
+            "2. Подбираем подходящую методологию.\n"
+            "3. Согласуем вводные: период, каналы, аудиторию, гео, точки или события.\n"
+            "4. Проводим расчёт или исследование.\n"
+            "5. Передаём результаты, выводы и рекомендации.\n\n"
+            "Если задача нестандартная, можно оставить заявку — менеджер подскажет, какой формат исследования подойдёт.",
+            parse_mode="HTML",
+            reply_markup=help_kb
+        )
+        return
+
+    if text == "📚 Что внутри материалов":
+        await message.answer(
+            "📚 <b>Что внутри Sales Kit</b>\n\n"
+            "В материалах собраны основные исследовательские продукты МТС Ads:\n\n"
+            "• Brand Lift\n"
+            "• Конверсионный анализ\n"
+            "• Аудиторный анализ\n"
+            "• OOH/DOOH-аналитика\n"
+            "• ТВ-аналитика\n"
+            "• Аналитика блогеров\n"
+            "• Кросс-механики\n"
+            "• AdHoc-исследования\n\n"
+            "Также внутри есть описание методологий, примеры задач и база кейсов.",
+            parse_mode="HTML",
+            reply_markup=materials_kb
+        )
+        return
+
+    if text == "📎 Получить Sales Kit":
         await message.answer(
             "📎 Отправляю материалы по исследовательским продуктам МТС Ads.\n\n"
-            "После просмотра можете нажать «📝 Оставить заявку» или «📅 Записаться на консультацию».",
-            reply_markup=main_kb
+            "После просмотра можете оставить заявку или записаться на консультацию.",
+            reply_markup=materials_kb
         )
 
         for material in MATERIALS:
@@ -307,20 +443,20 @@ async def handle_message(message: types.Message):
             parse_mode="HTML"
         )
         return
-    
-    if text == "📅 Записаться на консультацию":
+
+    if text == "📅 Записаться в MTS Link":
         await message.answer(
             "📅 <b>Запись на консультацию</b>\n\n"
-            "Вы можете выбрать удобное время для встречи в МТС Линк.\n\n"
+            "Вы можете выбрать удобное время для встречи в MTS Link.\n\n"
             "На консультации менеджер поможет:\n"
             "— уточнить бизнес-задачу\n"
             "— подобрать подходящее аналитическое решение\n"
             "— сориентировать по срокам и стоимости\n"
             "— подсказать, какие данные нужны для старта\n\n"
             f"Ссылка на запись:\n{MTS_LINK_URL}\n\n"
-            "После записи можете сразу написать сюда задачу — я передам её менеджеру заранее.",
+            "После записи можете передать задачу заранее — менеджер подготовится к встрече.",
             parse_mode="HTML",
-            reply_markup=main_kb
+            reply_markup=consultation_kb
         )
 
         username = message.from_user.username or "без username"
@@ -334,7 +470,7 @@ async def handle_message(message: types.Message):
         )
         return
 
-    if text == "🔍 Подобрать услугу":
+    if text == "🧭 Подбор по задаче":
         user_states[user_id] = "selection"
 
         await message.answer(
@@ -344,17 +480,7 @@ async def handle_message(message: types.Message):
             "— нужно оценить визиты в магазины\n"
             "— хотим узнать портрет аудитории\n"
             "— нужно доказать эффект рекламы на продажи",
-            reply_markup=main_kb
-        )
-        return
-
-    if text in ["👨‍💼 Связаться с менеджером", "📝 Оставить заявку"]:
-        user_states[user_id] = "lead_name"
-        user_leads[user_id] = {}
-
-        await message.answer(
-            "Давайте быстро соберём заявку, чтобы менеджер сразу понял контекст.\n\n"
-            "Как вас зовут?"
+            reply_markup=solution_kb
         )
         return
 
@@ -441,7 +567,7 @@ async def handle_message(message: types.Message):
         await message.answer(
             service_card(service),
             parse_mode="HTML",
-            reply_markup=services_kb
+            reply_markup=solution_kb
         )
         return
 
@@ -469,7 +595,7 @@ async def handle_message(message: types.Message):
             await message.answer(
                 "По описанию задачи больше всего подходит:\n\n" + service_card(suggested),
                 parse_mode="HTML",
-                reply_markup=services_kb
+                reply_markup=solution_kb
             )
         else:
             await message.answer(
@@ -492,20 +618,12 @@ async def handle_message(message: types.Message):
 
     await message.answer(
         "Я пока не понял, какую именно задачу нужно решить.\n\n"
-        "Можете написать проще, например:\n"
-        "— хочу оценить наружную рекламу\n"
-        "— нужно понять аудиторию бренда\n"
-        "— хочу проверить, выросли ли продажи после рекламы\n"
-        "— нужно понять, где живёт аудитория\n\n"
-        "Или нажмите «🔍 Подобрать услугу».",
+        "Выберите один из разделов главного меню или нажмите «🔍 Подобрать решение».",
         reply_markup=main_kb
     )
 
 
 async def main():
-    if not TOKEN:
-        raise ValueError("BOT_TOKEN не найден. Добавьте BOT_TOKEN в Render Environment Variables.")
-
     await dp.start_polling(bot)
 
 
