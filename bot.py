@@ -6,6 +6,7 @@ from stack_ai_client import ask_stack_ai
 import gspread
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, FSInputFile
+from aiogram.filters import Command
 
 
 TOKEN = "7975259132:AAHa5mxmASaF1-qfKjiOJvwfubCmbQ-2BKU"
@@ -246,6 +247,29 @@ def service_card(service):
 def start_lead_flow(user_id):
     user_states[user_id] = "lead_name"
     user_leads[user_id] = {}
+
+
+
+@dp.message(Command("ai"))
+async def ai_consultant(message: types.Message):
+    question = (message.text or "").replace("/ai", "", 1).strip()
+
+    if not question:
+        await message.answer(
+            "Напишите вопрос после команды.\n\n"
+            "Например:\n"
+            "/ai Что такое мультиканальная атрибуция?"
+        )
+        return
+
+    await message.answer("⏳ Готовлю ответ...")
+
+    answer = await ask_stack_ai(
+        user_text=question,
+        user_id=message.from_user.id,
+    )
+
+    await message.answer(answer)
 
 
 @dp.message()
