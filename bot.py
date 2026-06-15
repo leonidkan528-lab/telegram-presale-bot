@@ -2,7 +2,7 @@ import asyncio
 import os
 import json
 from datetime import datetime
-
+from stack_ai_client import ask_stack_ai
 import gspread
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, FSInputFile
