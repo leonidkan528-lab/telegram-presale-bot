@@ -39,18 +39,20 @@ async def ask_stack_ai(user_text: str, user_id: int | str) -> str:
                 headers=headers,
                 json=payload,
             ) as response:
+
                 data = await response.json()
 
                 if response.status != 200:
                     logger.error("Ошибка Stack AI: %s", data)
                     return FALLBACK_MESSAGE
 
-                answer = data.get("out-0")
+                outputs = data.get("outputs", {})
+                answer = outputs.get("out-0")
 
                 if isinstance(answer, str) and answer.strip():
                     return answer.strip()
 
-                logger.error("Не найден ответ out-0: %s", data)
+                logger.error("Не найден ответ outputs -> out-0: %s", data)
                 return FALLBACK_MESSAGE
 
     except Exception as error:
