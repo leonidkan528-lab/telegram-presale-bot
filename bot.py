@@ -470,71 +470,43 @@ async def my_id(message: types.Message):
         f"Username: @{username}",
         parse_mode="HTML"
     )
+@dp.message(Command("myid"))
+async def my_id(message: types.Message):
+    username = message.from_user.username or "без username"
+    full_name = message.from_user.full_name or "без имени"
 
-def start_lead_flow(user_id):
-    user_states[user_id] = "lead_name"
-    user_leads[user_id] = {}
+    await message.answer(
+        f"Ваш Telegram ID:\n"
+        f"<code>{message.from_user.id}</code>\n\n"
+        f"Имя: {full_name}\n"
+        f"Username: @{username}",
+        parse_mode="HTML"
+    )
 
-
-@dp.callback_query(lambda callback: callback.data and callback.data.startswith("access_"))
-async def handle_access_callback(callback: CallbackQuery):
-    if callback.from_user.id != ADMIN_ID:
-        await callback.answer("Нет прав для этого действия", show_alert=True)
+@dp.message(Command("myid"))
+async def ai_consultant(message: types.Message):
+    if not is_allowed(message.from_user.id):
+        await deny_access(message)
         return
 
-    action, user_id_raw = callback.data.split(":", 1)
-    target_user_id = int(user_id_raw)
+    question = (message.text or "").replace("/ai", "", 1).strip()
 
-    if action == "access_approve":
-        success, result_text = approve_access(
-            user_id=target_user_id,
-            approved_by=callback.from_user.id
+    if not question:
+        await message.answer(
+            "Напишите вопрос после команды.\n\n"
+            "Например:\n"
+            "/ai Что такое мультиканальная атрибуция?"
         )
+        return
 
-        if success:
-            await callback.answer("Доступ одобрен")
+    await message.answer("⏳ Готовлю ответ...")
 
-            await callback.message.edit_text(
-                f"✅ Доступ одобрен\n\n"
-                f"Telegram ID: <code>{target_user_id}</code>",
-                parse_mode="HTML"
-            )
+    answer = await ask_stack_ai(
+        user_text=question,
+        user_id=message.from_user.id,
+    )
 
-            try:
-                await bot.send_message(
-                    target_user_id,
-                    "✅ Вам открыт доступ к внутреннему боту МТС РТ.\n\n"
-                    "Напишите /start, чтобы открыть меню."
-                )
-            except Exception as e:
-                print(f"User notify error: {e}")
-        else:
-            await callback.answer(f"Ошибка: {result_text}", show_alert=True)
-
-    elif action == "access_reject":
-        success, result_text = reject_access(
-            user_id=target_user_id,
-            approved_by=callback.from_user.id
-        )
-
-        if success:
-            await callback.answer("Доступ отклонен")
-
-            await callback.message.edit_text(
-                f"❌ Доступ отклонен\n\n"
-                f"Telegram ID: <code>{target_user_id}</code>",
-                parse_mode="HTML"
-            )
-
-            try:
-                await bot.send_message(
-                    target_user_id,
-                    "❌ Заявка на доступ к боту отклонена."
-                )
-            except Exception as e:
-                print(f"User notify error: {e}")
-        else:
-            await callback.answer(f"Ошибка: {result_text}", show_alert=True)
+    await message.answer(answer)
 
 @dp.message(Command("ai"))
 async def ai_consultant(message: types.Message):
