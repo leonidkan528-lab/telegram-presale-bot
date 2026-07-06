@@ -20,18 +20,39 @@ from aiogram.types import (
 )
 
 
+# =========================================================
+# КОНФИГУРАЦИЯ
+# =========================================================
+# В рамках конфиденциальности из кода удалены:
+# 1. Реальный Telegram BOT_TOKEN
+# 2. Прямая ссылка на MTS Link
+# 3. Google service account JSON
+#
+# Их нужно хранить в Render → Environment:
+# BOT_TOKEN=...
+# ADMIN_ID=...
+# GOOGLE_CREDENTIALS=...
+# MTS_LINK_URL=...
+# =========================================================
+
 TOKEN = "7975259132:AAGz94yL-7K-UDOReGNL0yjAzSd8P3L5seE"
-ADMIN_ID = 237014151
+ADMIN_ID_RAW = 237014151
 MTS_LINK_URL = "https://mts.mts-link.ru/j/164981661/18742977822/stream-new/17925578984"
 
 GOOGLE_SHEET_NAME = "Telegram Leads"
 ACCESS_WORKSHEET_NAME = "Access"
+QUESTIONS_WORKSHEET_NAME = "Questions"
 
-BOT_VERSION = "MTS Ads Adviser v0.3 internal access / 2026-07"
+BOT_VERSION = "MTS Ads Adviser v0.4 internal presale / 2026-07"
 START_TIME = datetime.now()
 
 if not TOKEN:
     raise ValueError("BOT_TOKEN не найден. Добавьте BOT_TOKEN в Render Environment Variables.")
+
+if not ADMIN_ID_RAW or not ADMIN_ID_RAW.isdigit():
+    raise ValueError("ADMIN_ID не найден или задан неверно. Добавьте ADMIN_ID в Render Environment Variables.")
+
+ADMIN_ID = int(ADMIN_ID_RAW)
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
@@ -42,7 +63,7 @@ dp = Dispatcher()
 # =========================================================
 
 user_states = {}
-user_leads = {}
+user_requests = {}
 
 ALLOWED_USERS = {ADMIN_ID}
 pending_access_notifications = set()
@@ -62,73 +83,181 @@ MATERIALS = [
 
 
 # =========================================================
-# УСЛУГИ
+# ПРОДУКТЫ / УСЛУГИ
 # =========================================================
 
 services = [
     {
         "name": "Brand Lift",
-        "aliases": ["brand lift", "узнаваемость", "запоминаемость", "бренд", "отношение к бренду"],
+        "aliases": ["brand lift", "узнаваемость", "запоминаемость", "бренд", "отношение к бренду", "brand"],
         "price": "от 100 000 ₽",
         "time": "до 7 рабочих дней",
-        "desc": "помогает понять, запомнили ли рекламу и изменилось ли отношение к бренду.",
-        "best_for": "если нужно оценить эффект рекламы на знание бренда, запоминаемость и намерение купить.",
+        "desc": "исследование, которое показывает, как рекламная кампания повлияла на бренд-метрики: знание, запоминаемость, отношение к бренду, намерение купить.",
+        "best_for": "если клиент хочет понять, не только увидели ли рекламу, но и изменилось ли восприятие бренда.",
+        "inputs": [
+            "период рекламной кампании",
+            "целевая аудитория",
+            "география",
+            "каналы размещения",
+            "креативы / форматы",
+            "ключевые бренд-метрики для оценки",
+        ],
+        "client_pitch": "Мы можем оценить, как рекламная кампания повлияла на восприятие бренда: запомнили ли рекламу, выросло ли знание бренда, изменилось ли отношение или намерение купить.",
+        "limits": [
+            "Brand Lift не измеряет прямые продажи",
+            "результат зависит от достаточного объема контактов и корректности вводных",
+            "метрики нужно согласовать до старта исследования",
+        ],
     },
     {
         "name": "Конверсионный анализ",
-        "aliases": ["конверсионный анализ", "sales lift", "конверсии", "продажи", "заявки", "звонки"],
+        "aliases": ["конверсионный анализ", "sales lift", "конверсии", "продажи", "заявки", "звонки", "лиды", "cpa"],
         "price": "от 100 000 ₽",
         "time": "до 14 рабочих дней",
-        "desc": "показывает, привела ли реклама к целевым действиям: продажам, звонкам, заявкам или визитам на сайт.",
-        "best_for": "если нужно доказать бизнес-эффект рекламы.",
+        "desc": "показывает, привела ли реклама к целевым действиям: продажам, заявкам, звонкам, визитам на сайт или другим событиям.",
+        "best_for": "если клиент хочет доказать бизнес-эффект рекламы и связать кампанию с конкретными действиями.",
+        "inputs": [
+            "период кампании",
+            "список каналов размещения",
+            "описание целевых действий",
+            "CRM / лиды / продажи / события, если применимо",
+            "атрибуционное окно",
+            "география и аудитория",
+        ],
+        "client_pitch": "Мы можем оценить, как рекламный контакт связан с целевыми действиями: заявками, продажами, звонками или визитами на сайт. Это помогает понять вклад кампании в бизнес-результат.",
+        "limits": [
+            "нельзя обещать 100% атрибуцию всех продаж",
+            "для части задач нужны клиентские события или CRM-данные",
+            "результат зависит от объема данных и корректности матчинга",
+        ],
     },
     {
         "name": "Профилирование",
-        "aliases": ["профилирование", "аудитория", "соцдем", "интересы", "портрет аудитории"],
+        "aliases": ["профилирование", "аудитория", "соцдем", "интересы", "портрет аудитории", "кто аудитория"],
         "price": "от 185 000 ₽",
         "time": "до 7 рабочих дней",
-        "desc": "показывает портрет аудитории: географию, интересы, социально-демографические признаки.",
-        "best_for": "если нужно лучше понять, кто ваша аудитория.",
+        "desc": "показывает портрет аудитории: географию, интересы, социально-демографические признаки и поведенческие характеристики.",
+        "best_for": "если клиент хочет лучше понять свою аудиторию или проверить гипотезы о целевых сегментах.",
+        "inputs": [
+            "описание аудитории или источник аудитории",
+            "период анализа",
+            "география",
+            "интересующие признаки",
+            "цель анализа",
+        ],
+        "client_pitch": "Мы можем описать аудиторию клиента: кто эти люди, где они находятся, какие у них интересы и поведенческие особенности. Это помогает точнее планировать коммуникацию и медиаразмещение.",
+        "limits": [
+            "не раскрываем персональные данные конкретных людей",
+            "результаты используются в агрегированном виде",
+            "глубина анализа зависит от доступных данных и сегмента",
+        ],
     },
     {
         "name": "Анализ конкурентов",
-        "aliases": ["конкуренты", "анализ конкурентов", "сравнение", "бренды конкурентов"],
+        "aliases": ["конкуренты", "анализ конкурентов", "сравнение", "бренды конкурентов", "конкурентный анализ"],
         "price": "от 185 000 ₽",
         "time": "до 10 рабочих дней",
-        "desc": "помогает сравнить вашу аудиторию с аудиторией конкурентов.",
-        "best_for": "если нужно понять пересечения, различия и потенциал роста относительно конкурентов.",
+        "desc": "помогает сравнить аудиторию клиента с аудиторией конкурентов: пересечения, различия, потенциал роста и особенности сегментов.",
+        "best_for": "если клиент хочет понять, чем его аудитория отличается от аудитории конкурентов и где есть потенциал роста.",
+        "inputs": [
+            "список брендов / конкурентов",
+            "география",
+            "период анализа",
+            "интересующие сегменты",
+            "задача сравнения",
+        ],
+        "client_pitch": "Мы можем сравнить аудиторию бренда с конкурентами: где аудитории пересекаются, чем отличаются и какие сегменты могут быть перспективны для коммуникации.",
+        "limits": [
+            "результаты зависят от корректного определения конкурентного набора",
+            "анализ проводится на агрегированных данных",
+            "не подменяет полноценное стратегическое исследование рынка",
+        ],
     },
     {
         "name": "Тепловая карта",
-        "aliases": ["тепловая карта", "heatmap", "где живет", "где работает", "места посещения"],
+        "aliases": ["тепловая карта", "heatmap", "где живет", "где работает", "места посещения", "локации", "гео"],
         "price": "от 290 000 ₽",
         "time": "до 14 рабочих дней",
-        "desc": "показывает, где живёт, работает и бывает целевая аудитория.",
-        "best_for": "если нужно выбрать локации, оценить географию спроса или спланировать размещение.",
+        "desc": "показывает, где живет, работает и бывает целевая аудитория. Помогает понять географию спроса и выбрать локации.",
+        "best_for": "если нужно выбрать точки, оценить географию аудитории или спланировать наружную рекламу / офлайн-размещение.",
+        "inputs": [
+            "описание аудитории",
+            "география анализа",
+            "период",
+            "тип локаций",
+            "бизнес-задача",
+        ],
+        "client_pitch": "Мы можем показать, где концентрируется нужная аудитория: где она живет, работает и бывает. Это помогает выбирать локации, планировать офлайн-точки и наружную рекламу.",
+        "limits": [
+            "данные предоставляются в агрегированном виде",
+            "точность зависит от масштаба географии и размера аудитории",
+            "нельзя использовать для идентификации конкретных людей",
+        ],
     },
     {
         "name": "Аналитика наружной рекламы",
-        "aliases": ["наружная реклама", "наружка", "ooh", "dooh", "билборд", "щит"],
+        "aliases": ["наружная реклама", "наружка", "ooh", "dooh", "билборд", "щит", "щиты", "наружной"],
         "price": "от 175 000 ₽",
         "time": "до 14 рабочих дней",
-        "desc": "оценивает контакт аудитории с наружной рекламой и дальнейшие целевые действия.",
-        "best_for": "если нужно понять эффективность OOH/DOOH-размещений.",
+        "desc": "оценивает контакт аудитории с OOH/DOOH-размещением и помогает понять, как наружная реклама сработала после контакта.",
+        "best_for": "если клиент размещает наружную рекламу и хочет оценить охват, контакт, доходимость или последующие действия.",
+        "inputs": [
+            "список поверхностей / адресная программа",
+            "период кампании",
+            "география",
+            "формат размещения",
+            "целевая аудитория",
+            "целевое действие, если нужно оценивать post-contact эффект",
+        ],
+        "client_pitch": "Мы можем оценить, какая аудитория контактировала с наружной рекламой и что происходило после контакта: например, были ли визиты в точки или другие целевые действия.",
+        "limits": [
+            "для оценки нужны корректные данные по поверхностям и периоду",
+            "не стоит обещать абсолютную точность контакта каждого пользователя",
+            "для оценки бизнес-эффекта могут потребоваться дополнительные события или точки",
+        ],
     },
     {
         "name": "ТВ-аналитика",
-        "aliases": ["тв", "телевидение", "тв аналитика", "tv analytics", "реклама на тв"],
+        "aliases": ["тв", "телевидение", "тв аналитика", "tv analytics", "реклама на тв", "телек"],
         "price": "от 290 000 ₽",
         "time": "до 45 рабочих дней",
         "desc": "оценивает охват и эффект после контакта с ТВ-рекламой.",
-        "best_for": "если нужно связать ТВ-размещение с аудиторией или бизнес-результатом.",
+        "best_for": "если клиент хочет связать ТВ-размещение с аудиторией, охватом или последующими действиями.",
+        "inputs": [
+            "период ТВ-кампании",
+            "медиаплан / размещение",
+            "география",
+            "целевая аудитория",
+            "метрики, которые нужно оценить",
+        ],
+        "client_pitch": "Мы можем дополнить ТВ-размещение аналитикой: оценить контакт аудитории с кампанией и посмотреть дальнейшие эффекты в зависимости от задачи.",
+        "limits": [
+            "сроки обычно длиннее, чем у digital-задач",
+            "нужны корректные вводные по ТВ-размещению",
+            "методологию лучше согласовывать заранее",
+        ],
     },
     {
         "name": "Доходимость",
-        "aliases": ["доходимость", "footfall", "визиты", "посещаемость", "дошли до точки"],
+        "aliases": ["доходимость", "footfall", "визиты", "посещаемость", "дошли до точки", "магазины", "рестораны", "офлайн"],
         "price": "от 250 000 ₽",
         "time": "до 10 рабочих дней",
         "desc": "измеряет, сколько пользователей дошло до офлайн-точки после контакта с рекламой.",
-        "best_for": "если есть магазины, офисы, дилерские центры, рестораны или другие физические точки.",
+        "best_for": "если у клиента есть магазины, рестораны, офисы продаж, дилерские центры или другие физические точки.",
+        "inputs": [
+            "адреса офлайн-точек",
+            "период кампании",
+            "период пост-анализа",
+            "каналы размещения",
+            "география",
+            "логика целевого визита",
+        ],
+        "client_pitch": "Мы можем оценить, были ли визиты в офлайн-точки после рекламного контакта. Это особенно полезно для ресторанов, ритейла, дилеров, офисов продаж и других точек.",
+        "limits": [
+            "нужны корректные адреса точек",
+            "нужно согласовать окно визита после контакта",
+            "не стоит обещать, что каждый визит на 100% вызван рекламой",
+        ],
     },
 ]
 
@@ -139,10 +268,12 @@ services = [
 
 main_kb = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="🔍 Подобрать решение")],
-        [KeyboardButton(text="📎 Материалы"), KeyboardButton(text="📅 Консультация")],
-        [KeyboardButton(text="📝 Оставить заявку")],
-        [KeyboardButton(text="ℹ️ Помощь")],
+        [KeyboardButton(text="🤖 Задать presale-вопрос")],
+        [KeyboardButton(text="🧭 Подобрать решение под клиента")],
+        [KeyboardButton(text="📊 Продукты и методологии")],
+        [KeyboardButton(text="💬 Как объяснить клиенту"), KeyboardButton(text="❓ Возражения и FAQ")],
+        [KeyboardButton(text="🚫 Что нельзя обещать"), KeyboardButton(text="📎 Материалы")],
+        [KeyboardButton(text="📌 Передать нестандартный запрос")],
     ],
     resize_keyboard=True,
 )
@@ -166,25 +297,6 @@ materials_kb = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
-consultation_kb = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="📅 Записаться в MTS Link")],
-        [KeyboardButton(text="📝 Передать задачу заранее")],
-        [KeyboardButton(text="⬅️ В главное меню")],
-    ],
-    resize_keyboard=True,
-)
-
-help_kb = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="⚙️ Как проходит исследование")],
-        [KeyboardButton(text="❓ Частые вопросы")],
-        [KeyboardButton(text="👨‍💼 Связаться с менеджером")],
-        [KeyboardButton(text="⬅️ В главное меню")],
-    ],
-    resize_keyboard=True,
-)
-
 services_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="Brand Lift"), KeyboardButton(text="Конверсионный анализ")],
@@ -197,27 +309,11 @@ services_kb = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
-role_kb = ReplyKeyboardMarkup(
+internal_role_kb = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="🏢 Рекламодатель")],
-        [KeyboardButton(text="🤝 Агентство")],
-        [KeyboardButton(text="📈 Маркетолог")],
-        [KeyboardButton(text="📊 Аналитик")],
-        [KeyboardButton(text="❓ Другое")],
-        [KeyboardButton(text="❌ Отменить")],
-    ],
-    resize_keyboard=True,
-)
-
-interest_kb = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="📍 Доходимость")],
-        [KeyboardButton(text="📊 Brand Lift")],
-        [KeyboardButton(text="📈 Конверсионный анализ")],
-        [KeyboardButton(text="🎯 Профилирование")],
-        [KeyboardButton(text="🏙 Наружная реклама")],
-        [KeyboardButton(text="📺 ТВ-аналитика")],
-        [KeyboardButton(text="🤔 Пока не знаю")],
+        [KeyboardButton(text="Сейлз"), KeyboardButton(text="Аккаунт")],
+        [KeyboardButton(text="CSM"), KeyboardButton(text="Аналитик")],
+        [KeyboardButton(text="Руководитель"), KeyboardButton(text="Другое")],
         [KeyboardButton(text="❌ Отменить")],
     ],
     resize_keyboard=True,
@@ -238,19 +334,24 @@ def get_google_client():
     return gspread.service_account_from_dict(google_creds)
 
 
+def get_or_create_worksheet(spreadsheet, title, headers, rows=1000, cols=20):
+    try:
+        sheet = spreadsheet.worksheet(title)
+    except WorksheetNotFound:
+        sheet = spreadsheet.add_worksheet(title=title, rows=rows, cols=cols)
+        sheet.append_row(headers)
+
+    return sheet
+
+
 def get_access_sheet():
     gc = get_google_client()
     spreadsheet = gc.open(GOOGLE_SHEET_NAME)
 
-    try:
-        sheet = spreadsheet.worksheet(ACCESS_WORKSHEET_NAME)
-    except WorksheetNotFound:
-        sheet = spreadsheet.add_worksheet(
-            title=ACCESS_WORKSHEET_NAME,
-            rows=1000,
-            cols=10,
-        )
-        sheet.append_row([
+    return get_or_create_worksheet(
+        spreadsheet=spreadsheet,
+        title=ACCESS_WORKSHEET_NAME,
+        headers=[
             "created_at",
             "telegram_id",
             "username",
@@ -259,32 +360,83 @@ def get_access_sheet():
             "approved_at",
             "approved_by",
             "comment",
-        ])
+        ],
+    )
 
-    return sheet
+
+def get_questions_sheet():
+    gc = get_google_client()
+    spreadsheet = gc.open(GOOGLE_SHEET_NAME)
+
+    return get_or_create_worksheet(
+        spreadsheet=spreadsheet,
+        title=QUESTIONS_WORKSHEET_NAME,
+        headers=[
+            "created_at",
+            "telegram_id",
+            "username",
+            "full_name",
+            "question",
+            "mode",
+        ],
+    )
 
 
-def save_lead_to_google_sheets(lead, username, user_id):
+def log_question_to_google_sheets(message: types.Message, question: str, mode: str):
     try:
-        gc = get_google_client()
-        sheet = gc.open(GOOGLE_SHEET_NAME).sheet1
+        sheet = get_questions_sheet()
+
+        username = message.from_user.username or "без username"
+        full_name = message.from_user.full_name or "без имени"
 
         sheet.append_row([
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            lead.get("name", ""),
-            lead.get("company", ""),
-            lead.get("role", ""),
-            lead.get("interest", ""),
-            lead.get("task", ""),
-            lead.get("contact", ""),
+            str(message.from_user.id),
             username,
-            str(user_id),
+            full_name,
+            question,
+            mode,
         ])
 
-        return "✅ сохранена в Google Sheets"
+    except Exception as e:
+        print(f"Question log error: {e}")
+
+
+def save_internal_request_to_google_sheets(request_data, username, user_id):
+    try:
+        gc = get_google_client()
+        spreadsheet = gc.open(GOOGLE_SHEET_NAME)
+
+        sheet = get_or_create_worksheet(
+            spreadsheet=spreadsheet,
+            title="Internal Requests",
+            headers=[
+                "created_at",
+                "telegram_id",
+                "username",
+                "name",
+                "role",
+                "client",
+                "task",
+                "contact",
+            ],
+        )
+
+        sheet.append_row([
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            str(user_id),
+            username,
+            request_data.get("name", ""),
+            request_data.get("role", ""),
+            request_data.get("client", ""),
+            request_data.get("task", ""),
+            request_data.get("contact", ""),
+        ])
+
+        return "✅ сохранено в Google Sheets"
 
     except Exception as e:
-        print(f"Google Sheets error: {e}")
+        print(f"Internal request Google Sheets error: {e}")
         return f"⚠️ ошибка Google Sheets: {e}"
 
 
@@ -512,20 +664,77 @@ def find_service(text: str):
     return None
 
 
+def suggest_service_from_task(text: str):
+    text_lower = text.lower()
+
+    if any(word in text_lower for word in ["наруж", "ooh", "dooh", "щит", "билборд"]):
+        return find_service("наружная реклама")
+
+    if any(word in text_lower for word in ["визит", "точк", "магазин", "офлайн", "дошли", "ресторан", "дилер"]):
+        return find_service("доходимость")
+
+    if any(word in text_lower for word in ["аудитор", "портрет", "интерес", "соцдем", "кто покупает"]):
+        return find_service("профилирование")
+
+    if any(word in text_lower for word in ["продаж", "конверс", "заявк", "звонк", "лиды", "cpa"]):
+        return find_service("конверсионный анализ")
+
+    if any(word in text_lower for word in ["бренд", "узнаваем", "запомн", "отношение", "brand"]):
+        return find_service("brand lift")
+
+    if any(word in text_lower for word in ["конкурент", "сравнить", "сравнение"]):
+        return find_service("анализ конкурентов")
+
+    if any(word in text_lower for word in ["тв", "телевид", "телек"]):
+        return find_service("тв-аналитика")
+
+    if any(word in text_lower for word in ["карта", "гео", "локац", "где живет", "где работает"]):
+        return find_service("тепловая карта")
+
+    return None
+
+
+def format_list(items):
+    return "\n".join([f"— {item}" for item in items])
+
+
 def service_card(service):
     return (
         f"📊 <b>{service['name']}</b>\n\n"
+        f"<b>Что это:</b>\n"
         f"{service['desc']}\n\n"
-        f"✅ Подходит, {service['best_for']}\n\n"
-        f"💰 <b>Стоимость:</b> {service['price']}\n"
-        f"⏱ <b>Срок:</b> {service['time']}\n\n"
-        f"Можете оставить заявку или записаться на консультацию."
+        f"<b>Когда предлагать:</b>\n"
+        f"{service['best_for']}\n\n"
+        f"<b>Что запросить у клиента:</b>\n"
+        f"{format_list(service.get('inputs', []))}\n\n"
+        f"<b>Как объяснить клиенту:</b>\n"
+        f"{service.get('client_pitch', '')}\n\n"
+        f"<b>Ограничения:</b>\n"
+        f"{format_list(service.get('limits', []))}\n\n"
+        f"<b>Ориентир по стоимости:</b> {service['price']}\n"
+        f"<b>Ориентир по сроку:</b> {service['time']}\n\n"
+        f"⚠️ Цены, сроки и нестандартную методологию лучше дополнительно сверить с ответственным экспертом."
     )
 
 
-def start_lead_flow(user_id):
-    user_states[user_id] = "lead_name"
-    user_leads[user_id] = {}
+def start_internal_request_flow(user_id):
+    user_states[user_id] = "request_name"
+    user_requests[user_id] = {}
+
+
+def make_presale_prompt(question: str) -> str:
+    return (
+        "Ты внутренний presale-ассистент МТС Ads Adviser для сотрудников МТС РТ: сейлзов, аккаунтов, CSM и аналитиков.\n"
+        "Отвечай профессионально, структурно и аккуратно. Не выдумывай факты, цены, сроки и кейсы.\n"
+        "Если данных недостаточно — честно напиши, какие вводные нужно уточнить.\n"
+        "В ответе желательно использовать структуру:\n"
+        "1. Короткий вывод\n"
+        "2. Что предложить клиенту\n"
+        "3. Какие вводные запросить\n"
+        "4. Как объяснить клиенту простыми словами\n"
+        "5. Ограничения / что не обещать\n\n"
+        f"Вопрос сотрудника:\n{question}"
+    )
 
 
 # =========================================================
@@ -662,24 +871,34 @@ async def ai_consultant(message: types.Message):
         await message.answer(
             "Напишите вопрос после команды.\n\n"
             "Например:\n"
-            "/ai Что такое мультиканальная атрибуция?"
+            "/ai Клиент хочет оценить эффективность наружки, что предложить?"
         )
         return
 
-    await message.answer("⏳ Готовлю ответ...")
+    await message.answer("⏳ Готовлю presale-ответ...")
 
     try:
+        log_question_to_google_sheets(message, question, "command_ai")
+
         answer = await ask_stack_ai(
-            user_text=question,
+            user_text=make_presale_prompt(question),
             user_id=message.from_user.id,
         )
-        await message.answer(answer)
+
+        await message.answer(
+            answer + "\n\n"
+            "———\n"
+            "⚠️ Если вопрос связан с ценой, нестандартной методологией, юридическими ограничениями "
+            "или клиентскими данными — лучше дополнительно сверить ответ с ответственным экспертом.",
+            reply_markup=main_kb,
+        )
 
     except Exception as e:
         print(f"Stack AI error: {e}")
         await message.answer(
             "⚠️ Не удалось получить ответ от AI-модуля.\n\n"
-            "Попробуйте позже или передайте вопрос администратору."
+            "Попробуйте позже или передайте вопрос эксперту.",
+            reply_markup=main_kb,
         )
 
 
@@ -699,7 +918,7 @@ async def handle_message(message: types.Message):
 
     if text == "❌ Отменить":
         user_states[user_id] = None
-        user_leads[user_id] = {}
+        user_requests[user_id] = {}
 
         await message.answer(
             "Ок, отменил текущий сценарий. Возвращаю в главное меню.",
@@ -711,22 +930,293 @@ async def handle_message(message: types.Message):
         user_states[user_id] = None
 
         await message.answer(
-            "👋 Привет! Я помогу подобрать исследовательское решение МТС Ads под вашу задачу.\n\n"
-            "Выберите, что вам нужно:\n\n"
-            "🔍 подобрать решение\n"
+            "👋 Привет! Я внутренний presale-ассистент <b>MTS Ads Adviser</b>.\n\n"
+            "Помогаю сейлзам, аккаунтам и смежным командам быстро разобраться в продуктах, "
+            "подготовиться к клиентской встрече и сформулировать профессиональный ответ клиенту.\n\n"
+            "Что можно сделать:\n"
+            "🤖 задать presale-вопрос\n"
+            "🧭 подобрать решение под задачу клиента\n"
+            "📊 посмотреть продукты и методологии\n"
+            "💬 получить формулировку для клиента\n"
+            "❓ разобрать возражения\n"
+            "🚫 проверить, что нельзя обещать\n"
             "📎 получить материалы\n"
-            "📅 записаться на консультацию\n"
-            "📝 оставить заявку\n"
-            "ℹ️ узнать, как всё работает",
+            "📌 передать нестандартный запрос эксперту",
+            parse_mode="HTML",
             reply_markup=main_kb,
         )
         return
 
-    if text == "🔍 Подобрать решение":
+    # =====================================================
+    # РЕЖИМ AI-ВОПРОСА
+    # =====================================================
+
+    if user_states.get(user_id) == "ai_question":
+        await message.answer("⏳ Готовлю presale-ответ...")
+
+        try:
+            log_question_to_google_sheets(message, text, "button_ai")
+
+            answer = await ask_stack_ai(
+                user_text=make_presale_prompt(text),
+                user_id=message.from_user.id,
+            )
+
+            await message.answer(
+                answer + "\n\n"
+                "———\n"
+                "⚠️ Если вопрос связан с ценой, нестандартной методологией, юридическими ограничениями "
+                "или клиентскими данными — лучше дополнительно сверить ответ с ответственным экспертом.",
+                reply_markup=main_kb,
+            )
+
+        except Exception as e:
+            print(f"Stack AI error: {e}")
+            await message.answer(
+                "⚠️ Не удалось получить ответ от AI-модуля.\n\n"
+                "Попробуйте позже или передайте вопрос эксперту.",
+                reply_markup=main_kb,
+            )
+
+        user_states[user_id] = None
+        return
+
+    # =====================================================
+    # РЕЖИМ ОБЪЯСНЕНИЯ КЛИЕНТУ
+    # =====================================================
+
+    if user_states.get(user_id) == "client_explain":
+        service = find_service(text) or suggest_service_from_task(text)
+
+        if service:
+            await message.answer(
+                f"💬 <b>Как объяснить клиенту: {service['name']}</b>\n\n"
+                f"{service.get('client_pitch', '')}\n\n"
+                f"<b>Какие вводные запросить:</b>\n"
+                f"{format_list(service.get('inputs', []))}\n\n"
+                f"<b>Аккуратно проговорить ограничения:</b>\n"
+                f"{format_list(service.get('limits', []))}",
+                parse_mode="HTML",
+                reply_markup=main_kb,
+            )
+        else:
+            await message.answer(
+                "Не смог точно определить продукт по описанию.\n\n"
+                "Лучше нажмите «🤖 Задать presale-вопрос» и опишите клиентскую задачу подробнее.",
+                reply_markup=main_kb,
+            )
+
+        user_states[user_id] = None
+        return
+
+    # =====================================================
+    # РЕЖИМ ПОДБОРА ПО ЗАДАЧЕ
+    # =====================================================
+
+    if user_states.get(user_id) == "selection":
+        suggested = suggest_service_from_task(text)
+
+        if suggested:
+            await message.answer(
+                "По описанию клиентской задачи больше всего подходит:\n\n"
+                + service_card(suggested),
+                parse_mode="HTML",
+                reply_markup=main_kb,
+            )
+        else:
+            await message.answer(
+                "Пока не могу точно подобрать услугу по описанию.\n\n"
+                "Рекомендация: нажмите «🤖 Задать presale-вопрос» и опишите задачу подробнее "
+                "или передайте нестандартный запрос эксперту.",
+                reply_markup=main_kb,
+            )
+
+            username = message.from_user.username or "без username"
+
+            try:
+                await bot.send_message(
+                    ADMIN_ID,
+                    f"❗ <b>Нераспознанный запрос на подбор услуги</b>\n\n"
+                    f"От: @{username}\n"
+                    f"Telegram ID: <code>{user_id}</code>\n"
+                    f"Текст: {text}",
+                    parse_mode="HTML",
+                )
+            except Exception as e:
+                print(f"Admin notify error: {e}")
+
+        user_states[user_id] = None
+        return
+
+    # =====================================================
+    # РЕЖИМ ПЕРЕДАЧИ НЕСТАНДАРТНОГО ЗАПРОСА
+    # =====================================================
+
+    if user_states.get(user_id) == "request_name":
+        user_requests[user_id]["name"] = text
+        user_states[user_id] = "request_role"
+
         await message.answer(
-            "🔍 Раздел подбора решения.\n\n"
-            "Можно посмотреть все продукты, сравнить их, узнать цены или описать задачу — я подскажу подходящий вариант.",
-            reply_markup=solution_kb,
+            "Ваша роль / команда?",
+            reply_markup=internal_role_kb,
+        )
+        return
+
+    if user_states.get(user_id) == "request_role":
+        user_requests[user_id]["role"] = text
+        user_states[user_id] = "request_client"
+
+        await message.answer(
+            "По какому клиенту или категории вопрос?\n\n"
+            "Например: автобизнес, банки, ритейл, рестораны, недвижимость, конкретный клиент."
+        )
+        return
+
+    if user_states.get(user_id) == "request_client":
+        user_requests[user_id]["client"] = text
+        user_states[user_id] = "request_task"
+
+        await message.answer(
+            "Опишите задачу или вопрос, который нужно передать эксперту.\n\n"
+            "Чем подробнее вводные, тем быстрее можно будет ответить."
+        )
+        return
+
+    if user_states.get(user_id) == "request_task":
+        user_requests[user_id]["task"] = text
+        user_states[user_id] = "request_contact"
+
+        await message.answer(
+            "Как с вами удобнее связаться?\n\n"
+            "Можно указать Telegram, почту или просто написать «в Telegram»."
+        )
+        return
+
+    if user_states.get(user_id) == "request_contact":
+        user_requests[user_id]["contact"] = text
+
+        username = message.from_user.username or "без username"
+        request_data = user_requests[user_id]
+
+        sheet_status = save_internal_request_to_google_sheets(request_data, username, user_id)
+
+        await message.answer(
+            "✅ Запрос передан эксперту.\n\n"
+            "Если задача срочная, дополнительно напишите ответственному напрямую.",
+            reply_markup=main_kb,
+        )
+
+        try:
+            await bot.send_message(
+                ADMIN_ID,
+                f"📌 <b>Нестандартный запрос из внутреннего бота</b>\n\n"
+                f"👤 Имя: {request_data.get('name')}\n"
+                f"🧩 Роль: {request_data.get('role')}\n"
+                f"🏢 Клиент / категория: {request_data.get('client')}\n"
+                f"📌 Задача: {request_data.get('task')}\n"
+                f"☎️ Контакт: {request_data.get('contact')}\n"
+                f"🔗 Telegram: @{username}\n"
+                f"🧾 Таблица: {sheet_status}",
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            print(f"Admin notify error: {e}")
+
+        user_states[user_id] = None
+        user_requests[user_id] = {}
+        return
+
+    # =====================================================
+    # ГЛАВНОЕ МЕНЮ
+    # =====================================================
+
+    if text == "🤖 Задать presale-вопрос":
+        user_states[user_id] = "ai_question"
+
+        await message.answer(
+            "Напишите вопрос по presale, продуктам, методологии или клиентской задаче.\n\n"
+            "Например:\n"
+            "— Клиент хочет оценить эффективность наружки, что предложить?\n"
+            "— Чем Brand Lift отличается от конверсионного анализа?\n"
+            "— Какие вводные нужны для доходимости?\n"
+            "— Как объяснить клиенту мультиканальную атрибуцию?",
+            reply_markup=main_kb,
+        )
+        return
+
+    if text == "🧭 Подобрать решение под клиента" or text == "🧭 Подбор по задаче":
+        user_states[user_id] = "selection"
+
+        await message.answer(
+            "Опишите клиентскую задачу в одном сообщении.\n\n"
+            "Например:\n"
+            "— клиент хочет понять, сработала ли наружная реклама\n"
+            "— нужно оценить визиты в рестораны после кампании\n"
+            "— клиент хочет узнать портрет аудитории\n"
+            "— нужно доказать эффект рекламы на продажи",
+            reply_markup=main_kb,
+        )
+        return
+
+    if text == "📊 Продукты и методологии" or text == "📊 Все услуги":
+        await message.answer(
+            "📊 Выберите продукт или методологию:",
+            reply_markup=services_kb,
+        )
+        return
+
+    if text == "💬 Как объяснить клиенту":
+        user_states[user_id] = "client_explain"
+
+        await message.answer(
+            "Напишите название продукта или коротко опишите задачу клиента.\n\n"
+            "Например:\n"
+            "— Brand Lift\n"
+            "— Доходимость\n"
+            "— клиент хочет понять, были ли визиты в магазины после рекламы",
+            reply_markup=main_kb,
+        )
+        return
+
+    if text == "❓ Возражения и FAQ" or text == "❓ FAQ по продуктам":
+        await message.answer(
+            "❓ <b>Типовые возражения клиентов и ответы</b>\n\n"
+            "<b>1. “Мы не верим, что можно точно оценить эффект рекламы”</b>\n"
+            "Корректный ответ: мы не обещаем абсолютную 100% точность, но можем оценить вклад рекламы "
+            "через понятную методологию, сравнение групп, анализ контакта с рекламой и последующих действий.\n\n"
+            "<b>2. “У нас уже есть Яндекс Метрика / CRM / BI”</b>\n"
+            "Это плюс. Клиентские данные могут усилить исследование. Мы можем дополнить их телеком-данными, "
+            "геоаналитикой и независимым взглядом на аудиторию.\n\n"
+            "<b>3. “Почему так дорого?”</b>\n"
+            "Стоимость зависит от объема данных, периода, географии, методологии и сложности отчета. "
+            "Важно продавать не таблицу, а управленческий ответ: сработала ли реклама, на кого, где и как.\n\n"
+            "<b>4. “Можно ли гарантировать рост продаж?”</b>\n"
+            "Нет, гарантировать рост продаж нельзя. Можно оценить влияние кампании на целевые действия "
+            "и дать выводы для оптимизации следующих размещений.\n\n"
+            "<b>5. “Что нужно для старта?”</b>\n"
+            "Минимально: задача клиента, период кампании, каналы, география, аудитория и целевое действие. "
+            "Для части задач нужны адреса точек, CRM, лиды или события.",
+            parse_mode="HTML",
+            reply_markup=main_kb,
+        )
+        return
+
+    if text == "🚫 Что нельзя обещать":
+        await message.answer(
+            "🚫 <b>Что нельзя обещать клиенту</b>\n\n"
+            "1. Нельзя обещать 100% точную атрибуцию всех продаж.\n\n"
+            "2. Нельзя обещать результат без проверки вводных: периода, каналов, географии, объема данных, "
+            "точек продаж или событий.\n\n"
+            "3. Нельзя обещать персональные данные пользователей или раскрытие конкретных людей.\n\n"
+            "4. Нельзя обещать сроки без проверки сложности задачи и доступности данных.\n\n"
+            "5. Нельзя обещать нестандартную методологию без согласования с аналитиками.\n\n"
+            "6. Нельзя говорить клиенту, что исследование гарантирует рост продаж. "
+            "Мы оцениваем эффект и даем выводы, но не управляем всеми факторами бизнеса клиента.\n\n"
+            "7. Нельзя подменять Brand Lift конверсионным анализом: это разные задачи. "
+            "Brand Lift — про бренд-метрики, конверсионный анализ — про целевые действия.\n\n"
+            "8. Нельзя обещать, что геоаналитика покажет конкретных людей. Работаем только с агрегированными данными.",
+            parse_mode="HTML",
+            reply_markup=main_kb,
         )
         return
 
@@ -738,105 +1228,18 @@ async def handle_message(message: types.Message):
         )
         return
 
-    if text == "📅 Консультация":
+    if text == "📌 Передать нестандартный запрос":
+        start_internal_request_flow(user_id)
+
         await message.answer(
-            "📅 Раздел консультации.\n\n"
-            "Можно сразу записаться в MTS Link или передать задачу менеджеру заранее.",
-            reply_markup=consultation_kb,
+            "Передадим нестандартный запрос эксперту.\n\n"
+            "Сначала напишите ваше имя."
         )
         return
 
-    if text == "ℹ️ Помощь":
-        await message.answer(
-            "ℹ️ Раздел помощи.\n\n"
-            "Здесь можно узнать, как проходит исследование, посмотреть частые вопросы или связаться с менеджером.",
-            reply_markup=help_kb,
-        )
-        return
-
-    if text == "📝 Оставить заявку":
-        start_lead_flow(user_id)
-
-        await message.answer(
-            "Давайте быстро соберём заявку, чтобы менеджер сразу понял контекст.\n\n"
-            "Как вас зовут?"
-        )
-        return
-
-    if text == "📝 Передать задачу заранее" or text == "👨‍💼 Связаться с менеджером":
-        start_lead_flow(user_id)
-
-        await message.answer(
-            "Хорошо, передадим задачу менеджеру.\n\n"
-            "Как вас зовут?"
-        )
-        return
-
-    if text == "📊 Все услуги":
-        await message.answer(
-            "Выберите услугу из списка ниже:",
-            reply_markup=services_kb,
-        )
-        return
-
-    if text == "💰 Цены и сроки":
-        msg = "💰 <b>Цены и сроки по услугам:</b>\n\n"
-
-        for s in services:
-            msg += f"• <b>{s['name']}</b> — {s['price']}, {s['time']}\n"
-
-        await message.answer(
-            msg,
-            parse_mode="HTML",
-            reply_markup=solution_kb,
-        )
-        return
-
-    if text == "🆚 Сравнить продукты":
-        await message.answer(
-            "🆚 <b>Короткое сравнение продуктов</b>\n\n"
-            "<b>Brand Lift</b> — если нужно понять узнаваемость, запоминаемость и отношение к бренду.\n\n"
-            "<b>Конверсионный анализ</b> — если нужно оценить влияние рекламы на продажи, заявки, звонки или действия на сайте.\n\n"
-            "<b>Доходимость</b> — если нужно понять, дошли ли пользователи до офлайн-точек после контакта с рекламой.\n\n"
-            "<b>Профилирование</b> — если нужно узнать портрет аудитории: пол, возраст, интересы, гео и другие признаки.\n\n"
-            "<b>Аналитика наружной рекламы</b> — если нужно оценить эффективность OOH/DOOH-размещений.\n\n"
-            "<b>ТВ-аналитика</b> — если нужно оценить охват и эффект ТВ-размещений.",
-            parse_mode="HTML",
-            reply_markup=solution_kb,
-        )
-        return
-
-    if text == "❓ FAQ по продуктам" or text == "❓ Частые вопросы":
-        await message.answer(
-            "❓ <b>Частые вопросы</b>\n\n"
-            "<b>1. Можно ли оценить эффективность рекламы?</b>\n"
-            "Да. В зависимости от задачи подойдёт Brand Lift, конверсионный анализ, доходимость или OOH/TV-аналитика.\n\n"
-            "<b>2. Что нужно для старта?</b>\n"
-            "Обычно нужны период кампании, описание аудитории, каналы размещения и цель исследования.\n\n"
-            "<b>3. Можно ли оценить офлайн-точки?</b>\n"
-            "Да, для этого подходит доходимость или тепловая карта.\n\n"
-            "<b>4. Можно ли сравнить себя с конкурентами?</b>\n"
-            "Да, для этого есть анализ конкурентов.\n\n"
-            "<b>5. Если я не знаю, какая услуга нужна?</b>\n"
-            "Нажмите «🧭 Подбор по задаче» и опишите задачу своими словами.",
-            parse_mode="HTML",
-            reply_markup=help_kb,
-        )
-        return
-
-    if text == "⚙️ Как проходит исследование":
-        await message.answer(
-            "⚙️ <b>Как обычно проходит исследование</b>\n\n"
-            "1. Уточняем бизнес-задачу клиента.\n"
-            "2. Подбираем подходящую методологию.\n"
-            "3. Согласуем вводные: период, каналы, аудиторию, гео, точки или события.\n"
-            "4. Проводим расчёт или исследование.\n"
-            "5. Передаём результаты, выводы и рекомендации.\n\n"
-            "Если задача нестандартная, можно оставить заявку — менеджер подскажет, какой формат исследования подойдёт.",
-            parse_mode="HTML",
-            reply_markup=help_kb,
-        )
-        return
+    # =====================================================
+    # МАТЕРИАЛЫ
+    # =====================================================
 
     if text == "📚 Что внутри материалов":
         await message.answer(
@@ -850,7 +1253,7 @@ async def handle_message(message: types.Message):
             "• Аналитика блогеров\n"
             "• Кросс-механики\n"
             "• AdHoc-исследования\n\n"
-            "Также внутри есть описание методологий, примеры задач и база кейсов.",
+            "Также внутри могут быть описание методологий, примеры задач и база кейсов.",
             parse_mode="HTML",
             reply_markup=materials_kb,
         )
@@ -858,8 +1261,7 @@ async def handle_message(message: types.Message):
 
     if text == "📎 Получить Sales Kit":
         await message.answer(
-            "📎 Отправляю материалы по исследовательским продуктам МТС Ads.\n\n"
-            "После просмотра можете оставить заявку или записаться на консультацию.",
+            "📎 Отправляю материалы по исследовательским продуктам МТС Ads.",
             reply_markup=materials_kb,
         )
 
@@ -883,149 +1285,66 @@ async def handle_message(message: types.Message):
                 ADMIN_ID,
                 f"📎 <b>Пользователь запросил материалы</b>\n\n"
                 f"От: @{username}\n"
-                f"Telegram ID: {user_id}",
+                f"Telegram ID: <code>{user_id}</code>",
                 parse_mode="HTML",
             )
         except Exception as e:
             print(f"Admin notify error: {e}")
 
+        return
+
+    # =====================================================
+    # ДОПОЛНИТЕЛЬНЫЕ РАЗДЕЛЫ
+    # =====================================================
+
+    if text == "💰 Цены и сроки":
+        msg = (
+            "💰 <b>Ориентиры по ценам и срокам</b>\n\n"
+            "Важно: это предварительные ориентиры. Перед обещанием клиенту лучше сверить финальные условия.\n\n"
+        )
+
+        for service in services:
+            msg += f"• <b>{service['name']}</b> — {service['price']}, {service['time']}\n"
+
+        await message.answer(
+            msg,
+            parse_mode="HTML",
+            reply_markup=main_kb,
+        )
+        return
+
+    if text == "🆚 Сравнить продукты":
+        await message.answer(
+            "🆚 <b>Короткое сравнение продуктов</b>\n\n"
+            "<b>Brand Lift</b> — про бренд-метрики: знание, запоминаемость, отношение, намерение купить.\n\n"
+            "<b>Конверсионный анализ</b> — про целевые действия: продажи, заявки, звонки, сайт, лиды.\n\n"
+            "<b>Доходимость</b> — про визиты в офлайн-точки после контакта с рекламой.\n\n"
+            "<b>Профилирование</b> — про портрет аудитории: соцдем, интересы, география, поведение.\n\n"
+            "<b>OOH/DOOH-аналитика</b> — про контакт с наружной рекламой и post-contact эффекты.\n\n"
+            "<b>ТВ-аналитика</b> — про контакт с ТВ-размещением и дальнейшую оценку эффекта.\n\n"
+            "<b>Тепловая карта</b> — про географию аудитории: где живет, работает и бывает.",
+            parse_mode="HTML",
+            reply_markup=main_kb,
+        )
         return
 
     if text == "📅 Записаться в MTS Link":
         if MTS_LINK_URL:
-            link_text = f"Ссылка на запись:\n{MTS_LINK_URL}"
+            link_text = f"Ссылка на MTS Link:\n{MTS_LINK_URL}"
         else:
-            link_text = "Ссылка на MTS Link пока не настроена. Добавьте MTS_LINK_URL в Environment Variables."
+            link_text = "Ссылка на MTS Link пока не настроена. Добавьте MTS_LINK_URL в Render Environment."
 
         await message.answer(
-            "📅 <b>Запись на консультацию</b>\n\n"
-            "Вы можете выбрать удобное время для встречи в MTS Link.\n\n"
-            "На консультации менеджер поможет:\n"
-            "— уточнить бизнес-задачу\n"
-            "— подобрать подходящее аналитическое решение\n"
-            "— сориентировать по срокам и стоимости\n"
-            "— подсказать, какие данные нужны для старта\n\n"
-            f"{link_text}\n\n"
-            "После записи можете передать задачу заранее — менеджер подготовится к встрече.",
+            "📅 <b>Консультация / обсуждение задачи</b>\n\n"
+            "Можно использовать MTS Link для разбора нестандартной клиентской задачи.\n\n"
+            f"{link_text}",
             parse_mode="HTML",
-            reply_markup=consultation_kb,
-        )
-
-        username = message.from_user.username or "без username"
-
-        try:
-            await bot.send_message(
-                ADMIN_ID,
-                f"📅 <b>Пользователь открыл запись на консультацию</b>\n\n"
-                f"От: @{username}\n"
-                f"Telegram ID: {user_id}",
-                parse_mode="HTML",
-            )
-        except Exception as e:
-            print(f"Admin notify error: {e}")
-
-        return
-
-    if text == "🧭 Подбор по задаче":
-        user_states[user_id] = "selection"
-
-        await message.answer(
-            "Опишите задачу в одном сообщении.\n\n"
-            "Например:\n"
-            "— хотим понять, сработала ли наружная реклама\n"
-            "— нужно оценить визиты в магазины\n"
-            "— хотим узнать портрет аудитории\n"
-            "— нужно доказать эффект рекламы на продажи",
-            reply_markup=solution_kb,
-        )
-        return
-
-    # =====================================================
-    # СБОР ЗАЯВКИ
-    # =====================================================
-
-    if user_states.get(user_id) == "lead_name":
-        user_leads[user_id]["name"] = text
-        user_states[user_id] = "lead_company"
-
-        await message.answer("Из какой вы компании?")
-        return
-
-    if user_states.get(user_id) == "lead_company":
-        user_leads[user_id]["company"] = text
-        user_states[user_id] = "lead_role"
-
-        await message.answer(
-            "Кто вы?",
-            reply_markup=role_kb,
-        )
-        return
-
-    if user_states.get(user_id) == "lead_role":
-        user_leads[user_id]["role"] = text
-        user_states[user_id] = "lead_interest"
-
-        await message.answer(
-            "Какой продукт интересует больше всего?",
-            reply_markup=interest_kb,
-        )
-        return
-
-    if user_states.get(user_id) == "lead_interest":
-        user_leads[user_id]["interest"] = text
-        user_states[user_id] = "lead_task"
-
-        await message.answer(
-            "Кратко опишите задачу: что хотите измерить или проанализировать?"
-        )
-        return
-
-    if user_states.get(user_id) == "lead_task":
-        user_leads[user_id]["task"] = text
-        user_states[user_id] = "lead_contact"
-
-        await message.answer(
-            "Как с вами удобнее связаться? Можно оставить Telegram, телефон или email."
-        )
-        return
-
-    if user_states.get(user_id) == "lead_contact":
-        user_leads[user_id]["contact"] = text
-
-        username = message.from_user.username or "без username"
-        lead = user_leads[user_id]
-
-        sheet_status = save_lead_to_google_sheets(lead, username, user_id)
-
-        await message.answer(
-            "Спасибо! Передал заявку менеджеру.\n\n"
-            "Он сможет вернуться уже с пониманием вашей задачи.",
             reply_markup=main_kb,
         )
-
-        try:
-            await bot.send_message(
-                ADMIN_ID,
-                f"🔥 <b>Новая заявка из Telegram-бота</b>\n\n"
-                f"👤 Имя: {lead.get('name')}\n"
-                f"🏢 Компания: {lead.get('company')}\n"
-                f"👔 Роль: {lead.get('role')}\n"
-                f"🎯 Интерес: {lead.get('interest')}\n"
-                f"📌 Задача: {lead.get('task')}\n"
-                f"☎️ Контакт: {lead.get('contact')}\n"
-                f"🔗 Telegram: @{username}\n"
-                f"🧾 Таблица: {sheet_status}",
-                parse_mode="HTML",
-            )
-        except Exception as e:
-            print(f"Admin notify error: {e}")
-
-        user_states[user_id] = None
-        user_leads[user_id] = {}
         return
 
     # =====================================================
-    # ПОИСК УСЛУГИ ПО ТЕКСТУ
+    # КАРТОЧКИ ПРОДУКТОВ
     # =====================================================
 
     service = find_service(text)
@@ -1034,60 +1353,8 @@ async def handle_message(message: types.Message):
         await message.answer(
             service_card(service),
             parse_mode="HTML",
-            reply_markup=solution_kb,
+            reply_markup=main_kb,
         )
-        return
-
-    # =====================================================
-    # ПОДБОР ПО ЗАДАЧЕ
-    # =====================================================
-
-    if user_states.get(user_id) == "selection":
-        suggested = None
-
-        if any(word in text_lower for word in ["наруж", "ooh", "dooh", "щит", "билборд"]):
-            suggested = find_service("наружная реклама")
-        elif any(word in text_lower for word in ["визит", "точк", "магазин", "офлайн", "дошли"]):
-            suggested = find_service("доходимость")
-        elif any(word in text_lower for word in ["аудитор", "портрет", "интерес", "соцдем"]):
-            suggested = find_service("профилирование")
-        elif any(word in text_lower for word in ["продаж", "конверс", "заявк", "звонк"]):
-            suggested = find_service("конверсионный анализ")
-        elif any(word in text_lower for word in ["бренд", "узнаваем", "запомн", "отношение"]):
-            suggested = find_service("brand lift")
-        elif any(word in text_lower for word in ["конкурент", "сравнить"]):
-            suggested = find_service("анализ конкурентов")
-        elif any(word in text_lower for word in ["тв", "телевид"]):
-            suggested = find_service("тв-аналитика")
-        elif any(word in text_lower for word in ["карта", "гео", "локац", "где живет", "где работает"]):
-            suggested = find_service("тепловая карта")
-
-        if suggested:
-            await message.answer(
-                "По описанию задачи больше всего подходит:\n\n" + service_card(suggested),
-                parse_mode="HTML",
-                reply_markup=solution_kb,
-            )
-        else:
-            await message.answer(
-                "Пока не могу точно подобрать услугу по описанию.\n\n"
-                "Лучше передать задачу менеджеру — он уточнит детали и предложит подходящий вариант.",
-                reply_markup=main_kb,
-            )
-
-            username = message.from_user.username or "без username"
-
-            try:
-                await bot.send_message(
-                    ADMIN_ID,
-                    f"❗ <b>Нераспознанный запрос на подбор услуги</b>\n\n"
-                    f"От: @{username}\n"
-                    f"Текст: {text}",
-                    parse_mode="HTML",
-                )
-            except Exception as e:
-                print(f"Admin notify error: {e}")
-
         return
 
     # =====================================================
@@ -1095,8 +1362,8 @@ async def handle_message(message: types.Message):
     # =====================================================
 
     await message.answer(
-        "Я пока не понял, какую именно задачу нужно решить.\n\n"
-        "Выберите один из разделов главного меню или нажмите «🔍 Подобрать решение».",
+        "Я пока не понял запрос.\n\n"
+        "Выберите раздел главного меню или нажмите «🤖 Задать presale-вопрос».",
         reply_markup=main_kb,
     )
 
@@ -1109,6 +1376,7 @@ async def main():
     global ALLOWED_USERS
 
     ALLOWED_USERS = load_allowed_users_from_sheet()
+
     print(f"Loaded allowed users: {ALLOWED_USERS}")
     print(f"Bot version: {BOT_VERSION}")
 
