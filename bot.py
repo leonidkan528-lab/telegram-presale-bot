@@ -28,8 +28,7 @@ ACCESS_WORKSHEET_NAME = "Access"
 QUESTIONS_WORKSHEET_NAME = "Questions"
 FEEDBACK_WORKSHEET_NAME = "Feedback"
 INTERNAL_REQUESTS_WORKSHEET_NAME = "Internal Requests"
-
-BOT_VERSION = "MTS Ads Adviser v0.5 internal presale feedback / 2026-07"
+BOT_VERSION = "MTS Ads Adviser v0.6 internal presale feedback comments / 2026-07"
 START_TIME = datetime.now()
 
 if not TOKEN:
@@ -265,16 +264,6 @@ main_kb = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
-solution_kb = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="🧭 Подбор по задаче")],
-        [KeyboardButton(text="📊 Все услуги"), KeyboardButton(text="💰 Цены и сроки")],
-        [KeyboardButton(text="🆚 Сравнить продукты"), KeyboardButton(text="❓ FAQ по продуктам")],
-        [KeyboardButton(text="⬅️ В главное меню")],
-    ],
-    resize_keyboard=True,
-)
-
 materials_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📎 Получить Sales Kit")],
@@ -301,6 +290,19 @@ internal_role_kb = ReplyKeyboardMarkup(
         [KeyboardButton(text="Сейлз"), KeyboardButton(text="Аккаунт")],
         [KeyboardButton(text="CSM"), KeyboardButton(text="Аналитик")],
         [KeyboardButton(text="Руководитель"), KeyboardButton(text="Другое")],
+        [KeyboardButton(text="❌ Отменить")],
+    ],
+    resize_keyboard=True,
+)
+
+feedback_reason_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="Ответ слишком общий")],
+        [KeyboardButton(text="Не хватает методологии")],
+        [KeyboardButton(text="Не хватает формулировки для клиента")],
+        [KeyboardButton(text="Не хватает ограничений")],
+        [KeyboardButton(text="Фактологическая ошибка")],
+        [KeyboardButton(text="Другое / напишу сам")],
         [KeyboardButton(text="❌ Отменить")],
     ],
     resize_keyboard=True,
@@ -333,6 +335,27 @@ def get_google_client():
 def get_or_create_worksheet(spreadsheet, title, headers, rows=1000, cols=20):
     try:
         sheet = spreadsheet.worksheet(title)
+
+        try:
+            current_headers = sheet.row_values(1)
+
+            if not current_headers:
+                sheet.append_row(headers)
+            else:
+                updated_headers = current_headers[:]
+                changed = False
+
+                for header in headers:
+                    if header not in updated_headers:
+                        updated_headers.append(header)
+                        changed = True
+
+                if changed:
+                    sheet.update("A1", [updated_headers])
+
+        except Exception as e:
+            print(f"Header check error for {title}: {e}")
+
     except WorksheetNotFound:
         sheet = spreadsheet.add_worksheet(title=title, rows=rows, cols=cols)
         sheet.append_row(headers)
@@ -394,6 +417,7 @@ def get_feedback_sheet():
             "answer_preview",
             "rating",
             "mode",
+            "comment",
         ],
     )
 
@@ -418,9 +442,8 @@ def log_question_to_google_sheets(message: types.Message, question: str, mode: s
         print(f"Question log error: {e}")
 
 
-def log_feedback_to_google_sheets(callback: CallbackQuery, rating: str):
+def log_feedback_to_google_sheets(user, rating: str, comment: str = ""):
     try:
-        user = callback.from_user
         user_id = user.id
 
         username = user.username or "без username"
@@ -445,6 +468,7 @@ def log_feedback_to_google_sheets(callback: CallbackQuery, rating: str):
             answer_preview,
             rating,
             mode,
+            comment,
         ])
 
         return True
@@ -802,19 +826,34 @@ async def handle_feedback_callback(callback: CallbackQuery):
         return
 
     if callback.data == "feedback_good":
-        rating = "good"
-        rating_text = "👍 Полезно"
-    elif callback.data == "feedback_bad":
-        rating = "bad"
-        rating_text = "👎 Нужна доработка"
-    else:
-        await callback.answer("Некорректная оценка", show_alert=True)
+        success = log_feedback_to_google_sheets(
+            user=callback.from_user,
+            rating="good",
+            comment="",
+        )
+
+        if success:
+            await callback.answer("Спасибо, оценка сохранена")
+
+            try:
+                await callback.message.edit_reply_markup(reply_markup=None)
+            except Exception as e:
+                print(f"Feedback keyboard remove error: {e}")
+
+            await callback.message.answer(
+                "Спасибо за обратную связь: 👍 Полезно.\n\n"
+                "Это поможет улучшать ответы бота для внутренних команд.",
+                reply_markup=main_kb,
+            )
+        else:
+            await callback.answer("Не удалось сохранить оценку", show_alert=True)
+
         return
 
-    success = log_feedback_to_google_sheets(callback, rating)
+    if callback.data == "feedback_bad":
+        user_states[callback.from_user.id] = "feedback_comment"
 
-    if success:
-        await callback.answer("Спасибо, оценка сохранена")
+        await callback.answer("Уточните, что нужно доработать")
 
         try:
             await callback.message.edit_reply_markup(reply_markup=None)
@@ -822,11 +861,12 @@ async def handle_feedback_callback(callback: CallbackQuery):
             print(f"Feedback keyboard remove error: {e}")
 
         await callback.message.answer(
-            f"Спасибо за обратную связь: {rating_text}.\n\n"
-            "Это поможет улучшать ответы бота для внутренних команд."
+            "Что именно нужно доработать в ответе?",
+            reply_markup=feedback_reason_kb,
         )
-    else:
-        await callback.answer("Не удалось сохранить оценку", show_alert=True)
+        return
+
+    await callback.answer("Некорректная оценка", show_alert=True)
 
 
 # =========================================================
@@ -1013,7 +1053,6 @@ async def ai_consultant(message: types.Message):
 async def handle_message(message: types.Message):
     user_id = message.from_user.id
     text = (message.text or "").strip()
-    text_lower = text.lower()
 
     if not is_allowed(user_id):
         await deny_access(message)
@@ -1048,6 +1087,63 @@ async def handle_message(message: types.Message):
             parse_mode="HTML",
             reply_markup=main_kb,
         )
+        return
+
+    # =====================================================
+    # КОММЕНТАРИЙ К ОТРИЦАТЕЛЬНОЙ ОЦЕНКЕ
+    # =====================================================
+
+    if user_states.get(user_id) == "feedback_comment":
+        if text == "Другое / напишу сам":
+            user_states[user_id] = "feedback_free_comment"
+
+            await message.answer(
+                "Напишите коротко, что именно нужно исправить в ответе.",
+                reply_markup=main_kb,
+            )
+            return
+
+        success = log_feedback_to_google_sheets(
+            user=message.from_user,
+            rating="bad",
+            comment=text,
+        )
+
+        if success:
+            await message.answer(
+                "Спасибо, комментарий сохранен.\n\n"
+                "Это поможет улучшить качество ответов бота.",
+                reply_markup=main_kb,
+            )
+        else:
+            await message.answer(
+                "Не удалось сохранить комментарий в Google Sheets.",
+                reply_markup=main_kb,
+            )
+
+        user_states[user_id] = None
+        return
+
+    if user_states.get(user_id) == "feedback_free_comment":
+        success = log_feedback_to_google_sheets(
+            user=message.from_user,
+            rating="bad",
+            comment=text,
+        )
+
+        if success:
+            await message.answer(
+                "Спасибо, комментарий сохранен.\n\n"
+                "Это поможет улучшить качество ответов бота.",
+                reply_markup=main_kb,
+            )
+        else:
+            await message.answer(
+                "Не удалось сохранить комментарий в Google Sheets.",
+                reply_markup=main_kb,
+            )
+
+        user_states[user_id] = None
         return
 
     # =====================================================
@@ -1258,7 +1354,7 @@ async def handle_message(message: types.Message):
         )
         return
 
-    if text == "🧭 Подобрать решение под клиента" or text == "🧭 Подбор по задаче":
+    if text == "🧭 Подобрать решение под клиента":
         user_states[user_id] = "selection"
 
         await message.answer(
@@ -1272,7 +1368,7 @@ async def handle_message(message: types.Message):
         )
         return
 
-    if text == "📊 Продукты и методологии" or text == "📊 Все услуги":
+    if text == "📊 Продукты и методологии":
         await message.answer(
             "📊 Выберите продукт или методологию:",
             reply_markup=services_kb,
@@ -1292,7 +1388,7 @@ async def handle_message(message: types.Message):
         )
         return
 
-    if text == "❓ Возражения и FAQ" or text == "❓ FAQ по продуктам":
+    if text == "❓ Возражения и FAQ":
         await message.answer(
             "❓ <b>Типовые возражения клиентов и ответы</b>\n\n"
             "<b>1. “Мы не верим, что можно точно оценить эффект рекламы”</b>\n"
