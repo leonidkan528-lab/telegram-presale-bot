@@ -9,7 +9,7 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, FSInputFile
 from aiogram.filters import Command
 
 
-TOKEN = "7975259132:AAHa5mxmASaF1-qfKjiOJvwfubCmbQ-2BKU"
+TOKEN = "7975259132:AAGz94yL-7K-UDOReGNL0yjAzSd8P3L5seE"
 ADMIN_ID = 237014151
 
 if not TOKEN:
