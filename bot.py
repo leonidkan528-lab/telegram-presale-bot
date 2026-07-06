@@ -5,7 +5,7 @@ from datetime import datetime
 from stack_ai_client import ask_stack_ai
 import gspread
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, FSInputFile
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.filters import Command
 
 
@@ -21,6 +21,14 @@ dp = Dispatcher()
 user_states = {}
 user_leads = {}
 
+ACCESS_WORKSHEET_NAME = "Access"
+
+ALLOWED_USERS = {
+    ADMIN_ID,
+}
+
+pending_access_notifications = set()
+
 MTS_LINK_URL = "https://mts.mts-link.ru/j/164981661/18742977822/stream-new/17925578984"
 GOOGLE_SHEET_NAME = "Telegram Leads"
 
@@ -32,6 +40,213 @@ MATERIALS = [
     }
 ]
 
+def get_google_client():
+    google_creds_raw = os.getenv("GOOGLE_CREDENTIALS")
+
+    if not google_creds_raw:
+        raise ValueError("GOOGLE_CREDENTIALS не найден в Environment Variables")
+
+    google_creds = json.loads(google_creds_raw)
+    return gspread.service_account_from_dict(google_creds)
+
+
+def get_access_sheet():
+    gc = get_google_client()
+    spreadsheet = gc.open(GOOGLE_SHEET_NAME)
+
+    try:
+        sheet = spreadsheet.worksheet(ACCESS_WORKSHEET_NAME)
+    except gspread.WorksheetNotFound:
+        sheet = spreadsheet.add_worksheet(
+            title=ACCESS_WORKSHEET_NAME,
+            rows=1000,
+            cols=10
+        )
+        sheet.append_row([
+            "created_at",
+            "telegram_id",
+            "username",
+            "full_name",
+            "status",
+            "approved_at",
+            "approved_by",
+            "comment"
+        ])
+
+    return sheet
+
+
+def load_allowed_users_from_sheet():
+    allowed = {ADMIN_ID}
+
+    try:
+        sheet = get_access_sheet()
+        records = sheet.get_all_records()
+
+        for row in records:
+            status = str(row.get("status", "")).strip().lower()
+            telegram_id = str(row.get("telegram_id", "")).strip()
+
+            if status == "approved" and telegram_id.isdigit():
+                allowed.add(int(telegram_id))
+
+    except Exception as e:
+        print(f"Access load error: {e}")
+
+    return allowed
+
+
+def find_access_row(sheet, user_id: int):
+    records = sheet.get_all_records()
+
+    for index, row in enumerate(records, start=2):
+        telegram_id = str(row.get("telegram_id", "")).strip()
+
+        if telegram_id == str(user_id):
+            return index, row
+
+    return None, None
+
+
+def create_or_update_access_request(user_id: int, username: str, full_name: str):
+    try:
+        sheet = get_access_sheet()
+        row_index, existing = find_access_row(sheet, user_id)
+
+        if existing:
+            status = str(existing.get("status", "")).strip().lower()
+
+            if status == "approved":
+                return "approved"
+
+            if status == "pending":
+                return "pending"
+
+            sheet.update_cell(row_index, 5, "pending")
+            sheet.update_cell(row_index, 8, "Повторный запрос доступа")
+            return "new_pending"
+
+        sheet.append_row([
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            str(user_id),
+            username,
+            full_name,
+            "pending",
+            "",
+            "",
+            ""
+        ])
+
+        return "new_pending"
+
+    except Exception as e:
+        print(f"Access request error: {e}")
+        return "error"
+
+
+def approve_access(user_id: int, approved_by: int):
+    try:
+        sheet = get_access_sheet()
+        row_index, existing = find_access_row(sheet, user_id)
+
+        if not existing:
+            return False, "Заявка не найдена"
+
+        sheet.update_cell(row_index, 5, "approved")
+        sheet.update_cell(row_index, 6, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        sheet.update_cell(row_index, 7, str(approved_by))
+
+        ALLOWED_USERS.add(user_id)
+
+        return True, "Доступ выдан"
+
+    except Exception as e:
+        print(f"Approve access error: {e}")
+        return False, str(e)
+
+
+def reject_access(user_id: int, approved_by: int):
+    try:
+        sheet = get_access_sheet()
+        row_index, existing = find_access_row(sheet, user_id)
+
+        if not existing:
+            return False, "Заявка не найдена"
+
+        sheet.update_cell(row_index, 5, "rejected")
+        sheet.update_cell(row_index, 6, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        sheet.update_cell(row_index, 7, str(approved_by))
+
+        if user_id in ALLOWED_USERS and user_id != ADMIN_ID:
+            ALLOWED_USERS.remove(user_id)
+
+        return True, "Доступ отклонен"
+
+    except Exception as e:
+        print(f"Reject access error: {e}")
+        return False, str(e)
+
+
+def is_allowed(user_id: int) -> bool:
+    return user_id in ALLOWED_USERS or user_id == ADMIN_ID
+
+async def deny_access(message: types.Message):
+    user_id = message.from_user.id
+    username = message.from_user.username or "без username"
+    full_name = message.from_user.full_name or "без имени"
+
+    request_status = create_or_update_access_request(
+        user_id=user_id,
+        username=username,
+        full_name=full_name
+    )
+
+    if request_status == "approved":
+        ALLOWED_USERS.add(user_id)
+        await message.answer(
+            "✅ Доступ уже одобрен. Напишите /start, чтобы открыть меню."
+        )
+        return
+
+    await message.answer(
+        "⛔ Доступ к боту открыт только для внутренних сотрудников МТС РТ.\n\n"
+        "Заявка на доступ отправлена администратору. "
+        "После одобрения бот автоматически сообщит вам об открытии доступа."
+    )
+
+    if request_status == "pending" and user_id in pending_access_notifications:
+        return
+
+    pending_access_notifications.add(user_id)
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Одобрить",
+                    callback_data=f"access_approve:{user_id}"
+                ),
+                InlineKeyboardButton(
+                    text="❌ Отклонить",
+                    callback_data=f"access_reject:{user_id}"
+                )
+            ]
+        ]
+    )
+
+    try:
+        await bot.send_message(
+            ADMIN_ID,
+            f"🔐 <b>Новая заявка на доступ к боту</b>\n\n"
+            f"Имя: {full_name}\n"
+            f"Username: @{username}\n"
+            f"Telegram ID: <code>{user_id}</code>\n\n"
+            f"Одобрить доступ?",
+            parse_mode="HTML",
+            reply_markup=keyboard
+        )
+    except Exception as e:
+        print(f"Admin notify error: {e}")
 
 services = [
     {
@@ -243,18 +458,93 @@ def service_card(service):
         f"Можете оставить заявку или записаться на консультацию."
     )
 
+@dp.message(Command("myid"))
+async def my_id(message: types.Message):
+    username = message.from_user.username or "без username"
+    full_name = message.from_user.full_name or "без имени"
+
+    await message.answer(
+        f"Ваш Telegram ID:\n"
+        f"<code>{message.from_user.id}</code>\n\n"
+        f"Имя: {full_name}\n"
+        f"Username: @{username}",
+        parse_mode="HTML"
+    )
 
 def start_lead_flow(user_id):
     user_states[user_id] = "lead_name"
     user_leads[user_id] = {}
 
 
+@dp.callback_query(lambda callback: callback.data and callback.data.startswith("access_"))
+async def handle_access_callback(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("Нет прав для этого действия", show_alert=True)
+        return
+
+    action, user_id_raw = callback.data.split(":", 1)
+    target_user_id = int(user_id_raw)
+
+    if action == "access_approve":
+        success, result_text = approve_access(
+            user_id=target_user_id,
+            approved_by=callback.from_user.id
+        )
+
+        if success:
+            await callback.answer("Доступ одобрен")
+
+            await callback.message.edit_text(
+                f"✅ Доступ одобрен\n\n"
+                f"Telegram ID: <code>{target_user_id}</code>",
+                parse_mode="HTML"
+            )
+
+            try:
+                await bot.send_message(
+                    target_user_id,
+                    "✅ Вам открыт доступ к внутреннему боту МТС РТ.\n\n"
+                    "Напишите /start, чтобы открыть меню."
+                )
+            except Exception as e:
+                print(f"User notify error: {e}")
+        else:
+            await callback.answer(f"Ошибка: {result_text}", show_alert=True)
+
+    elif action == "access_reject":
+        success, result_text = reject_access(
+            user_id=target_user_id,
+            approved_by=callback.from_user.id
+        )
+
+        if success:
+            await callback.answer("Доступ отклонен")
+
+            await callback.message.edit_text(
+                f"❌ Доступ отклонен\n\n"
+                f"Telegram ID: <code>{target_user_id}</code>",
+                parse_mode="HTML"
+            )
+
+            try:
+                await bot.send_message(
+                    target_user_id,
+                    "❌ Заявка на доступ к боту отклонена."
+                )
+            except Exception as e:
+                print(f"User notify error: {e}")
+        else:
+            await callback.answer(f"Ошибка: {result_text}", show_alert=True)
 
 @dp.message(Command("ai"))
 async def ai_consultant(message: types.Message):
     question = (message.text or "").replace("/ai", "", 1).strip()
 
-    if not question:
+if not is_allowed(message.from_user.id):
+        await deny_access(message)
+        return
+    
+if not question:
         await message.answer(
             "Напишите вопрос после команды.\n\n"
             "Например:\n"
@@ -277,6 +567,10 @@ async def handle_message(message: types.Message):
     user_id = message.from_user.id
     text = (message.text or "").strip()
     text_lower = text.lower()
+    
+    if not is_allowed(user_id):
+        await deny_access(message)
+        return
 
     if text == "❌ Отменить":
         user_states[user_id] = None
@@ -648,6 +942,11 @@ async def handle_message(message: types.Message):
 
 
 async def main():
+    global ALLOWED_USERS
+
+    ALLOWED_USERS = load_allowed_users_from_sheet()
+    print(f"Loaded allowed users: {ALLOWED_USERS}")
+
     await dp.start_polling(bot)
 
 
