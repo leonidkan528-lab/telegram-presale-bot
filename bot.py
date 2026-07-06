@@ -19,22 +19,6 @@ from aiogram.types import (
     CallbackQuery,
 )
 
-
-# =========================================================
-# КОНФИГУРАЦИЯ
-# =========================================================
-# В рамках конфиденциальности из кода удалены:
-# 1. Реальный Telegram BOT_TOKEN
-# 2. Прямая ссылка на MTS Link
-# 3. Google service account JSON
-#
-# Их нужно хранить в Render → Environment:
-# BOT_TOKEN=...
-# ADMIN_ID=...
-# GOOGLE_CREDENTIALS=...
-# MTS_LINK_URL=...
-# =========================================================
-
 TOKEN = "7975259132:AAGz94yL-7K-UDOReGNL0yjAzSd8P3L5seE"
 ADMIN_ID_RAW = 237014151
 MTS_LINK_URL = "https://mts.mts-link.ru/j/164981661/18742977822/stream-new/17925578984"
@@ -49,9 +33,10 @@ START_TIME = datetime.now()
 if not TOKEN:
     raise ValueError("BOT_TOKEN не найден. Добавьте BOT_TOKEN в Render Environment Variables.")
 
-if not ADMIN_ID_RAW or not ADMIN_ID_RAW.isdigit():
+try:
+    ADMIN_ID = int(str(ADMIN_ID_RAW).strip())
+except Exception:
     raise ValueError("ADMIN_ID не найден или задан неверно. Добавьте ADMIN_ID в Render Environment Variables.")
-
 ADMIN_ID = int(ADMIN_ID_RAW)
 
 bot = Bot(token=TOKEN)
