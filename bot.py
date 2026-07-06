@@ -26,8 +26,10 @@ MTS_LINK_URL = "https://mts.mts-link.ru/j/164981661/18742977822/stream-new/17925
 GOOGLE_SHEET_NAME = "Telegram Leads"
 ACCESS_WORKSHEET_NAME = "Access"
 QUESTIONS_WORKSHEET_NAME = "Questions"
+FEEDBACK_WORKSHEET_NAME = "Feedback"
+INTERNAL_REQUESTS_WORKSHEET_NAME = "Internal Requests"
 
-BOT_VERSION = "MTS Ads Adviser v0.4 internal presale / 2026-07"
+BOT_VERSION = "MTS Ads Adviser v0.5 internal presale feedback / 2026-07"
 START_TIME = datetime.now()
 
 if not TOKEN:
@@ -37,7 +39,6 @@ try:
     ADMIN_ID = int(str(ADMIN_ID_RAW).strip())
 except Exception:
     raise ValueError("ADMIN_ID не найден или задан неверно. Добавьте ADMIN_ID в Render Environment Variables.")
-ADMIN_ID = int(ADMIN_ID_RAW)
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
@@ -49,6 +50,7 @@ dp = Dispatcher()
 
 user_states = {}
 user_requests = {}
+last_ai_answers = {}
 
 ALLOWED_USERS = {ADMIN_ID}
 pending_access_notifications = set()
@@ -304,6 +306,15 @@ internal_role_kb = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
+feedback_kb = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [
+            InlineKeyboardButton(text="👍 Полезно", callback_data="feedback_good"),
+            InlineKeyboardButton(text="👎 Нужна доработка", callback_data="feedback_bad"),
+        ]
+    ]
+)
+
 
 # =========================================================
 # GOOGLE SHEETS
@@ -367,6 +378,26 @@ def get_questions_sheet():
     )
 
 
+def get_feedback_sheet():
+    gc = get_google_client()
+    spreadsheet = gc.open(GOOGLE_SHEET_NAME)
+
+    return get_or_create_worksheet(
+        spreadsheet=spreadsheet,
+        title=FEEDBACK_WORKSHEET_NAME,
+        headers=[
+            "created_at",
+            "telegram_id",
+            "username",
+            "full_name",
+            "question",
+            "answer_preview",
+            "rating",
+            "mode",
+        ],
+    )
+
+
 def log_question_to_google_sheets(message: types.Message, question: str, mode: str):
     try:
         sheet = get_questions_sheet()
@@ -387,6 +418,42 @@ def log_question_to_google_sheets(message: types.Message, question: str, mode: s
         print(f"Question log error: {e}")
 
 
+def log_feedback_to_google_sheets(callback: CallbackQuery, rating: str):
+    try:
+        user = callback.from_user
+        user_id = user.id
+
+        username = user.username or "без username"
+        full_name = user.full_name or "без имени"
+
+        last_answer_data = last_ai_answers.get(user_id, {})
+
+        question = last_answer_data.get("question", "")
+        answer = last_answer_data.get("answer", "")
+        mode = last_answer_data.get("mode", "")
+
+        answer_preview = answer[:500]
+
+        sheet = get_feedback_sheet()
+
+        sheet.append_row([
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            str(user_id),
+            username,
+            full_name,
+            question,
+            answer_preview,
+            rating,
+            mode,
+        ])
+
+        return True
+
+    except Exception as e:
+        print(f"Feedback log error: {e}")
+        return False
+
+
 def save_internal_request_to_google_sheets(request_data, username, user_id):
     try:
         gc = get_google_client()
@@ -394,7 +461,7 @@ def save_internal_request_to_google_sheets(request_data, username, user_id):
 
         sheet = get_or_create_worksheet(
             spreadsheet=spreadsheet,
-            title="Internal Requests",
+            title=INTERNAL_REQUESTS_WORKSHEET_NAME,
             headers=[
                 "created_at",
                 "telegram_id",
@@ -680,6 +747,8 @@ def suggest_service_from_task(text: str):
 
 
 def format_list(items):
+    if not items:
+        return "— не указано"
     return "\n".join([f"— {item}" for item in items])
 
 
@@ -720,6 +789,44 @@ def make_presale_prompt(question: str) -> str:
         "5. Ограничения / что не обещать\n\n"
         f"Вопрос сотрудника:\n{question}"
     )
+
+
+# =========================================================
+# CALLBACK: FEEDBACK
+# =========================================================
+
+@dp.callback_query(lambda callback: callback.data and callback.data.startswith("feedback_"))
+async def handle_feedback_callback(callback: CallbackQuery):
+    if not is_allowed(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+
+    if callback.data == "feedback_good":
+        rating = "good"
+        rating_text = "👍 Полезно"
+    elif callback.data == "feedback_bad":
+        rating = "bad"
+        rating_text = "👎 Нужна доработка"
+    else:
+        await callback.answer("Некорректная оценка", show_alert=True)
+        return
+
+    success = log_feedback_to_google_sheets(callback, rating)
+
+    if success:
+        await callback.answer("Спасибо, оценка сохранена")
+
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception as e:
+            print(f"Feedback keyboard remove error: {e}")
+
+        await callback.message.answer(
+            f"Спасибо за обратную связь: {rating_text}.\n\n"
+            "Это поможет улучшать ответы бота для внутренних команд."
+        )
+    else:
+        await callback.answer("Не удалось сохранить оценку", show_alert=True)
 
 
 # =========================================================
@@ -870,11 +977,22 @@ async def ai_consultant(message: types.Message):
             user_id=message.from_user.id,
         )
 
+        last_ai_answers[message.from_user.id] = {
+            "question": question,
+            "answer": answer,
+            "mode": "command_ai",
+        }
+
         await message.answer(
             answer + "\n\n"
             "———\n"
             "⚠️ Если вопрос связан с ценой, нестандартной методологией, юридическими ограничениями "
             "или клиентскими данными — лучше дополнительно сверить ответ с ответственным экспертом.",
+            reply_markup=feedback_kb,
+        )
+
+        await message.answer(
+            "Выберите следующий раздел:",
             reply_markup=main_kb,
         )
 
@@ -947,11 +1065,22 @@ async def handle_message(message: types.Message):
                 user_id=message.from_user.id,
             )
 
+            last_ai_answers[user_id] = {
+                "question": text,
+                "answer": answer,
+                "mode": "button_ai",
+            }
+
             await message.answer(
                 answer + "\n\n"
                 "———\n"
                 "⚠️ Если вопрос связан с ценой, нестандартной методологией, юридическими ограничениями "
                 "или клиентскими данными — лучше дополнительно сверить ответ с ответственным экспертом.",
+                reply_markup=feedback_kb,
+            )
+
+            await message.answer(
+                "Выберите следующий раздел:",
                 reply_markup=main_kb,
             )
 
