@@ -1,6 +1,8 @@
 import asyncio
 import os
 import json
+import re
+import html
 from datetime import datetime
 
 import gspread
@@ -19,8 +21,20 @@ from aiogram.types import (
     CallbackQuery,
 )
 
+
+# =========================================================
+# КОНФИГУРАЦИЯ
+# =========================================================
+# В Render → Environment должны быть:
+# BOT_TOKEN=...
+# ADMIN_ID=...
+# GOOGLE_CREDENTIALS=...
+# MTS_LINK_URL=...
+# GOOGLE_SHEET_NAME=Telegram Leads
+# =========================================================
+
 TOKEN = "7975259132:AAGz94yL-7K-UDOReGNL0yjAzSd8P3L5seE"
-ADMIN_ID_RAW = 237014151
+ADMIN_ID = 237014151
 MTS_LINK_URL = "https://mts.mts-link.ru/j/164981661/18742977822/stream-new/17925578984"
 
 GOOGLE_SHEET_NAME = "Telegram Leads"
@@ -28,7 +42,8 @@ ACCESS_WORKSHEET_NAME = "Access"
 QUESTIONS_WORKSHEET_NAME = "Questions"
 FEEDBACK_WORKSHEET_NAME = "Feedback"
 INTERNAL_REQUESTS_WORKSHEET_NAME = "Internal Requests"
-BOT_VERSION = "MTS Ads Adviser v0.6 internal presale feedback comments / 2026-07"
+
+BOT_VERSION = "MTS Ads Adviser v0.7 clean Stack AI answers / 2026-07"
 START_TIME = datetime.now()
 
 if not TOKEN:
@@ -75,7 +90,14 @@ MATERIALS = [
 services = [
     {
         "name": "Brand Lift",
-        "aliases": ["brand lift", "узнаваемость", "запоминаемость", "бренд", "отношение к бренду", "brand"],
+        "aliases": [
+            "brand lift",
+            "узнаваемость",
+            "запоминаемость",
+            "бренд",
+            "отношение к бренду",
+            "brand",
+        ],
         "price": "от 100 000 ₽",
         "time": "до 7 рабочих дней",
         "desc": "исследование, которое показывает, как рекламная кампания повлияла на бренд-метрики: знание, запоминаемость, отношение к бренду, намерение купить.",
@@ -97,7 +119,16 @@ services = [
     },
     {
         "name": "Конверсионный анализ",
-        "aliases": ["конверсионный анализ", "sales lift", "конверсии", "продажи", "заявки", "звонки", "лиды", "cpa"],
+        "aliases": [
+            "конверсионный анализ",
+            "sales lift",
+            "конверсии",
+            "продажи",
+            "заявки",
+            "звонки",
+            "лиды",
+            "cpa",
+        ],
         "price": "от 100 000 ₽",
         "time": "до 14 рабочих дней",
         "desc": "показывает, привела ли реклама к целевым действиям: продажам, заявкам, звонкам, визитам на сайт или другим событиям.",
@@ -119,7 +150,14 @@ services = [
     },
     {
         "name": "Профилирование",
-        "aliases": ["профилирование", "аудитория", "соцдем", "интересы", "портрет аудитории", "кто аудитория"],
+        "aliases": [
+            "профилирование",
+            "аудитория",
+            "соцдем",
+            "интересы",
+            "портрет аудитории",
+            "кто аудитория",
+        ],
         "price": "от 185 000 ₽",
         "time": "до 7 рабочих дней",
         "desc": "показывает портрет аудитории: географию, интересы, социально-демографические признаки и поведенческие характеристики.",
@@ -140,7 +178,13 @@ services = [
     },
     {
         "name": "Анализ конкурентов",
-        "aliases": ["конкуренты", "анализ конкурентов", "сравнение", "бренды конкурентов", "конкурентный анализ"],
+        "aliases": [
+            "конкуренты",
+            "анализ конкурентов",
+            "сравнение",
+            "бренды конкурентов",
+            "конкурентный анализ",
+        ],
         "price": "от 185 000 ₽",
         "time": "до 10 рабочих дней",
         "desc": "помогает сравнить аудиторию клиента с аудиторией конкурентов: пересечения, различия, потенциал роста и особенности сегментов.",
@@ -161,7 +205,15 @@ services = [
     },
     {
         "name": "Тепловая карта",
-        "aliases": ["тепловая карта", "heatmap", "где живет", "где работает", "места посещения", "локации", "гео"],
+        "aliases": [
+            "тепловая карта",
+            "heatmap",
+            "где живет",
+            "где работает",
+            "места посещения",
+            "локации",
+            "гео",
+        ],
         "price": "от 290 000 ₽",
         "time": "до 14 рабочих дней",
         "desc": "показывает, где живет, работает и бывает целевая аудитория. Помогает понять географию спроса и выбрать локации.",
@@ -182,7 +234,16 @@ services = [
     },
     {
         "name": "Аналитика наружной рекламы",
-        "aliases": ["наружная реклама", "наружка", "ooh", "dooh", "билборд", "щит", "щиты", "наружной"],
+        "aliases": [
+            "наружная реклама",
+            "наружка",
+            "ooh",
+            "dooh",
+            "билборд",
+            "щит",
+            "щиты",
+            "наружной",
+        ],
         "price": "от 175 000 ₽",
         "time": "до 14 рабочих дней",
         "desc": "оценивает контакт аудитории с OOH/DOOH-размещением и помогает понять, как наружная реклама сработала после контакта.",
@@ -204,7 +265,14 @@ services = [
     },
     {
         "name": "ТВ-аналитика",
-        "aliases": ["тв", "телевидение", "тв аналитика", "tv analytics", "реклама на тв", "телек"],
+        "aliases": [
+            "тв",
+            "телевидение",
+            "тв аналитика",
+            "tv analytics",
+            "реклама на тв",
+            "телек",
+        ],
         "price": "от 290 000 ₽",
         "time": "до 45 рабочих дней",
         "desc": "оценивает охват и эффект после контакта с ТВ-рекламой.",
@@ -225,7 +293,16 @@ services = [
     },
     {
         "name": "Доходимость",
-        "aliases": ["доходимость", "footfall", "визиты", "посещаемость", "дошли до точки", "магазины", "рестораны", "офлайн"],
+        "aliases": [
+            "доходимость",
+            "footfall",
+            "визиты",
+            "посещаемость",
+            "дошли до точки",
+            "магазины",
+            "рестораны",
+            "офлайн",
+        ],
         "price": "от 250 000 ₽",
         "time": "до 10 рабочих дней",
         "desc": "измеряет, сколько пользователей дошло до офлайн-точки после контакта с рекламой.",
@@ -805,6 +882,8 @@ def make_presale_prompt(question: str) -> str:
         "Ты внутренний presale-ассистент МТС Ads Adviser для сотрудников МТС РТ: сейлзов, аккаунтов, CSM и аналитиков.\n"
         "Отвечай профессионально, структурно и аккуратно. Не выдумывай факты, цены, сроки и кейсы.\n"
         "Если данных недостаточно — честно напиши, какие вводные нужно уточнить.\n"
+        "Не вставляй ссылки на источники, номера документов, ID чанков, служебные коды, цитаты в квадратных скобках.\n"
+        "Не используй markdown-разметку со звездочками. Пиши обычным чистым текстом для Telegram.\n"
         "В ответе желательно использовать структуру:\n"
         "1. Короткий вывод\n"
         "2. Что предложить клиенту\n"
@@ -813,6 +892,75 @@ def make_presale_prompt(question: str) -> str:
         "5. Ограничения / что не обещать\n\n"
         f"Вопрос сотрудника:\n{question}"
     )
+
+
+def clean_ai_answer(raw_answer: str) -> str:
+    """
+    Убирает из ответа Stack AI служебные ссылки на источники,
+    странные цифровые хвосты, markdown-звездочки и HTML-сущности.
+    """
+    if not raw_answer:
+        return ""
+
+    text = str(raw_answer)
+
+    # Раскодировать HTML-сущности типа &quot;, &#x27; и т.п.
+    text = html.unescape(text)
+
+    # Убрать source/citation блоки вида 【...】
+    text = re.sub(r"【[^】]*】", "", text)
+
+    # Убрать цифровые ссылки вида 67283.1.0 / 67283:1:0 / ^67283.1.0
+    text = re.sub(r"[\[\(\{]?\s*[\^*]?\d{4,}(?:[.:]\d+){1,5}\s*[\]\)\}]?", "", text)
+
+    # Убрать ID вида #67283.1.0
+    text = re.sub(r"#\s*\d{4,}(?:[.:]\d+){1,5}", "", text)
+
+    # Убрать явные ссылки на источники вида [source ...], [cite ...], [источник ...]
+    text = re.sub(
+        r"\[\s*(source|cite|citation|источник|sources|citations)[^\]]*\]",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    # Убрать markdown-ссылки, оставив только текст
+    # [текст](url) -> текст
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+
+    # Убрать голые URL
+    text = re.sub(r"https?://\S+", "", text)
+
+    # Заменить markdown-жирный и курсив на обычный текст
+    text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
+    text = re.sub(r"__(.*?)__", r"\1", text)
+    text = re.sub(r"\*(.*?)\*", r"\1", text)
+
+    # Убрать markdown-заголовки
+    text = re.sub(r"(?m)^\s{0,3}#{1,6}\s*", "", text)
+
+    # Заменить markdown bullets на нормальные точки
+    text = re.sub(r"(?m)^\s*[-*]\s+", "• ", text)
+
+    # Убрать лишние служебные символы, которые часто остаются рядом с удаленными ссылками
+    text = re.sub(r"\(\s*\)", "", text)
+    text = re.sub(r"\[\s*\]", "", text)
+
+    # Почистить лишние пробелы и пустые строки
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r" +\n", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    return text.strip()
+
+
+def format_ai_answer_for_telegram(raw_answer: str) -> str:
+    clean_text = clean_ai_answer(raw_answer)
+
+    if not clean_text:
+        return "Не удалось подготовить ответ. Попробуйте переформулировать вопрос."
+
+    return clean_text
 
 
 # =========================================================
@@ -1012,10 +1160,12 @@ async def ai_consultant(message: types.Message):
     try:
         log_question_to_google_sheets(message, question, "command_ai")
 
-        answer = await ask_stack_ai(
+        raw_answer = await ask_stack_ai(
             user_text=make_presale_prompt(question),
             user_id=message.from_user.id,
         )
+
+        answer = format_ai_answer_for_telegram(raw_answer)
 
         last_ai_answers[message.from_user.id] = {
             "question": question,
@@ -1156,10 +1306,12 @@ async def handle_message(message: types.Message):
         try:
             log_question_to_google_sheets(message, text, "button_ai")
 
-            answer = await ask_stack_ai(
+            raw_answer = await ask_stack_ai(
                 user_text=make_presale_prompt(text),
                 user_id=message.from_user.id,
             )
+
+            answer = format_ai_answer_for_telegram(raw_answer)
 
             last_ai_answers[user_id] = {
                 "question": text,
