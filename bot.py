@@ -10,6 +10,8 @@ from html import escape as h
 import gspread
 from gspread.exceptions import WorksheetNotFound
 
+from aiohttp import web
+
 from stack_ai_client import ask_stack_ai
 
 from aiogram import Bot, Dispatcher, types
@@ -54,6 +56,10 @@ BOT_VERSION = "MTS Ads Adviser v0.8 clean Stack AI answers / 2026-07"
 START_TIME = datetime.now()
 
 STACK_AI_TIMEOUT_SECONDS = 30
+
+# Порт для health-check веб-сервера.
+# Render передает PORT автоматически; локально будет 8080.
+HEALTH_PORT = int(os.getenv("PORT", "8080"))
 
 if not TOKEN:
     raise ValueError("BOT_TOKEN не найден. Добавьте BOT_TOKEN в Render Environment Variables.")
@@ -1273,7 +1279,9 @@ async def status(message: types.Message):
         f"Запущен: {START_TIME.strftime('%Y-%m-%d %H:%M:%S')}\n"
         f"Время работы: {str(uptime).split('.')[0]}\n"
         f"Пользователей с доступом: {len(ALLOWED_USERS)}\n"
-        f"{google_status}",
+        f"Перезапусков polling: {reliability_stats['polling_restarts']}"
+        + (f" (последний: {reliability_stats['last_restart_at']})" if reliability_stats["last_restart_at"] else "")
+        + f"\n{google_status}",
         parse_mode="HTML",
     )
 
@@ -1799,15 +1807,94 @@ async def handle_message(message: types.Message):
 # ЗАПУСК
 # =========================================================
 
+# Счетчик перезапусков polling — виден в /status через ссылку на этот dict
+reliability_stats = {"polling_restarts": 0, "last_restart_at": None}
+
+
+async def health_handler(request):
+    """Эндпоинт для Render и внешнего мониторинга (UptimeRobot и т.п.).
+    Пока он отвечает 200 — бот жив, а бесплатный Render не усыпляет сервис."""
+    uptime = datetime.now() - START_TIME
+    return web.json_response({
+        "status": "ok",
+        "version": BOT_VERSION,
+        "uptime_seconds": int(uptime.total_seconds()),
+        "allowed_users": len(ALLOWED_USERS),
+        "polling_restarts": reliability_stats["polling_restarts"],
+    })
+
+
+async def start_health_server():
+    app = web.Application()
+    app.router.add_get("/", health_handler)
+    app.router.add_get("/health", health_handler)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+
+    site = web.TCPSite(runner, host="0.0.0.0", port=HEALTH_PORT)
+    await site.start()
+
+    logger.info("Health-check server started on port %s", HEALTH_PORT)
+
+
+async def notify_admin_safe(text: str):
+    """Отправка сообщения админу, которая никогда не роняет бот сама."""
+    try:
+        await bot.send_message(ADMIN_ID, text, parse_mode="HTML")
+    except Exception as e:
+        logger.warning("Admin notify error: %s", e)
+
+
+async def run_polling_forever():
+    """Обертка вокруг start_polling: при падении по сетевой или иной ошибке
+    бот не умирает, а перезапускает polling с нарастающей паузой (5с → 300с)
+    и уведомляет админа о каждом инциденте."""
+    delay = 5
+
+    while True:
+        try:
+            logger.info("Starting polling...")
+            await dp.start_polling(bot)
+            # start_polling завершился штатно (остановка) — выходим из цикла
+            logger.info("Polling stopped normally.")
+            break
+
+        except Exception as e:
+            reliability_stats["polling_restarts"] += 1
+            reliability_stats["last_restart_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            logger.exception("Polling crashed: %s", e)
+
+            await notify_admin_safe(
+                f"⚠️ <b>Polling упал и будет перезапущен</b>\n\n"
+                f"Ошибка: {h(str(e))[:300]}\n"
+                f"Перезапуск через {delay} сек.\n"
+                f"Всего перезапусков: {reliability_stats['polling_restarts']}"
+            )
+
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 300)
+
+
 async def main():
     global ALLOWED_USERS
+
+    # Health-check сервер поднимаем первым: Render должен сразу увидеть открытый порт
+    await start_health_server()
 
     ALLOWED_USERS = await load_allowed_users_from_sheet()
 
     logger.info("Loaded allowed users: %s", ALLOWED_USERS)
     logger.info("Bot version: %s", BOT_VERSION)
 
-    await dp.start_polling(bot)
+    await notify_admin_safe(
+        f"🚀 <b>Бот запущен</b>\n\n"
+        f"Версия: {BOT_VERSION}\n"
+        f"Пользователей с доступом: {len(ALLOWED_USERS)}\n"
+        f"Health-check: порт {HEALTH_PORT}"
+    )
+
+    await run_polling_forever()
 
 
 if __name__ == "__main__":
