@@ -1,9 +1,11 @@
 import asyncio
+import logging
 import os
 import json
 import re
 import html
 from datetime import datetime
+from html import escape as h
 
 import gspread
 from gspread.exceptions import WorksheetNotFound
@@ -21,6 +23,23 @@ from aiogram.types import (
     CallbackQuery,
 )
 
+# =========================================================
+# ЛОГИРОВАНИЕ
+# =========================================================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
+logger = logging.getLogger("mts_ads_adviser")
+
+
+# =========================================================
+# КОНФИГ
+# =========================================================
+
+# ВНИМАНИЕ: по просьбе пользователя секреты здесь оставлены как есть —
+# это единственное место в файле, которое сознательно не меняется сейчас.
 TOKEN = "7975259132:AAGz94yL-7K-UDOReGNL0yjAzSd8P3L5seE"
 ADMIN_ID = 237014151
 MTS_LINK_URL = "https://mts.mts-link.ru/j/164981661/18742977822/stream-new/17925578984"
@@ -31,8 +50,10 @@ QUESTIONS_WORKSHEET_NAME = "Questions"
 FEEDBACK_WORKSHEET_NAME = "Feedback"
 INTERNAL_REQUESTS_WORKSHEET_NAME = "Internal Requests"
 
-BOT_VERSION = "MTS Ads Adviser v0.7 clean Stack AI answers / 2026-07"
+BOT_VERSION = "MTS Ads Adviser v0.8 clean Stack AI answers / 2026-07"
 START_TIME = datetime.now()
+
+STACK_AI_TIMEOUT_SECONDS = 30
 
 if not TOKEN:
     raise ValueError("BOT_TOKEN не найден. Добавьте BOT_TOKEN в Render Environment Variables.")
@@ -249,7 +270,7 @@ services = [
     {
         "name": "ТВ-аналитика",
         "aliases": [
-            "тв",
+            "тв-аналитика",
             "телевидение",
             "тв аналитика",
             "tv analytics",
@@ -319,6 +340,8 @@ main_kb = ReplyKeyboardMarkup(
         [KeyboardButton(text="📊 Продукты и методологии")],
         [KeyboardButton(text="💬 Как объяснить клиенту"), KeyboardButton(text="❓ Возражения и FAQ")],
         [KeyboardButton(text="🚫 Что нельзя обещать"), KeyboardButton(text="📎 Материалы")],
+        [KeyboardButton(text="💰 Цены и сроки"), KeyboardButton(text="🆚 Сравнить продукты")],
+        [KeyboardButton(text="📅 Записаться в MTS Link")],
         [KeyboardButton(text="📌 Передать нестандартный запрос")],
     ],
     resize_keyboard=True,
@@ -379,8 +402,12 @@ feedback_kb = InlineKeyboardMarkup(
 
 
 # =========================================================
-# GOOGLE SHEETS
+# GOOGLE SHEETS (синхронные функции + кеш подключения)
 # =========================================================
+
+_gspread_client = None
+_spreadsheet_cache = None
+
 
 def get_google_client():
     google_creds_raw = os.getenv("GOOGLE_CREDENTIALS")
@@ -390,6 +417,29 @@ def get_google_client():
 
     google_creds = json.loads(google_creds_raw)
     return gspread.service_account_from_dict(google_creds)
+
+
+def get_spreadsheet(force_reload: bool = False):
+    """Кеширует подключение к таблице, чтобы не пересоздавать клиента на каждый запрос."""
+    global _gspread_client, _spreadsheet_cache
+
+    if force_reload or _spreadsheet_cache is None:
+        _gspread_client = get_google_client()
+        _spreadsheet_cache = _gspread_client.open(GOOGLE_SHEET_NAME)
+
+    return _spreadsheet_cache
+
+
+def _with_spreadsheet_retry(func, *args, **kwargs):
+    """Пытается выполнить func(spreadsheet, *args, **kwargs); при ошибке один раз
+    переподключается к Google Sheets и повторяет попытку."""
+    try:
+        spreadsheet = get_spreadsheet()
+        return func(spreadsheet, *args, **kwargs)
+    except Exception as e:
+        logger.warning("Google Sheets call failed, retrying with fresh connection: %s", e)
+        spreadsheet = get_spreadsheet(force_reload=True)
+        return func(spreadsheet, *args, **kwargs)
 
 
 def get_or_create_worksheet(spreadsheet, title, headers, rows=1000, cols=20):
@@ -414,7 +464,7 @@ def get_or_create_worksheet(spreadsheet, title, headers, rows=1000, cols=20):
                     sheet.update("A1", [updated_headers])
 
         except Exception as e:
-            print(f"Header check error for {title}: {e}")
+            logger.warning("Header check error for %s: %s", title, e)
 
     except WorksheetNotFound:
         sheet = spreadsheet.add_worksheet(title=title, rows=rows, cols=cols)
@@ -423,10 +473,7 @@ def get_or_create_worksheet(spreadsheet, title, headers, rows=1000, cols=20):
     return sheet
 
 
-def get_access_sheet():
-    gc = get_google_client()
-    spreadsheet = gc.open(GOOGLE_SHEET_NAME)
-
+def _get_access_sheet(spreadsheet):
     return get_or_create_worksheet(
         spreadsheet=spreadsheet,
         title=ACCESS_WORKSHEET_NAME,
@@ -443,10 +490,7 @@ def get_access_sheet():
     )
 
 
-def get_questions_sheet():
-    gc = get_google_client()
-    spreadsheet = gc.open(GOOGLE_SHEET_NAME)
-
+def _get_questions_sheet(spreadsheet):
     return get_or_create_worksheet(
         spreadsheet=spreadsheet,
         title=QUESTIONS_WORKSHEET_NAME,
@@ -461,10 +505,7 @@ def get_questions_sheet():
     )
 
 
-def get_feedback_sheet():
-    gc = get_google_client()
-    spreadsheet = gc.open(GOOGLE_SHEET_NAME)
-
+def _get_feedback_sheet(spreadsheet):
     return get_or_create_worksheet(
         spreadsheet=spreadsheet,
         title=FEEDBACK_WORKSHEET_NAME,
@@ -482,33 +523,52 @@ def get_feedback_sheet():
     )
 
 
-def log_question_to_google_sheets(message: types.Message, question: str, mode: str):
+def _get_internal_requests_sheet(spreadsheet):
+    return get_or_create_worksheet(
+        spreadsheet=spreadsheet,
+        title=INTERNAL_REQUESTS_WORKSHEET_NAME,
+        headers=[
+            "created_at",
+            "telegram_id",
+            "username",
+            "name",
+            "role",
+            "client",
+            "task",
+            "contact",
+        ],
+    )
+
+
+def get_access_sheet():
+    return _with_spreadsheet_retry(_get_access_sheet)
+
+
+def get_questions_sheet():
+    return _with_spreadsheet_retry(_get_questions_sheet)
+
+
+def get_feedback_sheet():
+    return _with_spreadsheet_retry(_get_feedback_sheet)
+
+
+def _log_question_sync(user_id: str, username: str, full_name: str, question: str, mode: str):
     try:
         sheet = get_questions_sheet()
-
-        username = message.from_user.username or "без username"
-        full_name = message.from_user.full_name or "без имени"
-
         sheet.append_row([
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            str(message.from_user.id),
+            user_id,
             username,
             full_name,
             question,
             mode,
         ])
-
     except Exception as e:
-        print(f"Question log error: {e}")
+        logger.error("Question log error: %s", e)
 
 
-def log_feedback_to_google_sheets(user, rating: str, comment: str = ""):
+def _log_feedback_sync(user_id: int, username: str, full_name: str, rating: str, comment: str = ""):
     try:
-        user_id = user.id
-
-        username = user.username or "без username"
-        full_name = user.full_name or "без имени"
-
         last_answer_data = last_ai_answers.get(user_id, {})
 
         question = last_answer_data.get("question", "")
@@ -534,29 +594,14 @@ def log_feedback_to_google_sheets(user, rating: str, comment: str = ""):
         return True
 
     except Exception as e:
-        print(f"Feedback log error: {e}")
+        logger.error("Feedback log error: %s", e)
         return False
 
 
-def save_internal_request_to_google_sheets(request_data, username, user_id):
+def _save_internal_request_sync(request_data, username, user_id):
     try:
-        gc = get_google_client()
-        spreadsheet = gc.open(GOOGLE_SHEET_NAME)
-
-        sheet = get_or_create_worksheet(
-            spreadsheet=spreadsheet,
-            title=INTERNAL_REQUESTS_WORKSHEET_NAME,
-            headers=[
-                "created_at",
-                "telegram_id",
-                "username",
-                "name",
-                "role",
-                "client",
-                "task",
-                "contact",
-            ],
-        )
+        spreadsheet = get_spreadsheet()
+        sheet = _get_internal_requests_sheet(spreadsheet)
 
         sheet.append_row([
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -572,15 +617,11 @@ def save_internal_request_to_google_sheets(request_data, username, user_id):
         return "✅ сохранено в Google Sheets"
 
     except Exception as e:
-        print(f"Internal request Google Sheets error: {e}")
+        logger.error("Internal request Google Sheets error: %s", e)
         return f"⚠️ ошибка Google Sheets: {e}"
 
 
-# =========================================================
-# ДОСТУПЫ
-# =========================================================
-
-def load_allowed_users_from_sheet():
+def _load_allowed_users_sync():
     allowed = {ADMIN_ID}
 
     try:
@@ -595,27 +636,27 @@ def load_allowed_users_from_sheet():
                 allowed.add(int(telegram_id))
 
     except Exception as e:
-        print(f"Access load error: {e}")
+        logger.error("Access load error: %s", e)
 
     return allowed
 
 
-def find_access_row(sheet, user_id: int):
+def _find_access_row_sync(user_id: int):
+    sheet = get_access_sheet()
     records = sheet.get_all_records()
 
     for index, row in enumerate(records, start=2):
         telegram_id = str(row.get("telegram_id", "")).strip()
 
         if telegram_id == str(user_id):
-            return index, row
+            return sheet, index, row
 
-    return None, None
+    return sheet, None, None
 
 
-def create_or_update_access_request(user_id: int, username: str, full_name: str):
+def _create_or_update_access_request_sync(user_id: int, username: str, full_name: str):
     try:
-        sheet = get_access_sheet()
-        row_index, existing = find_access_row(sheet, user_id)
+        sheet, row_index, existing = _find_access_row_sync(user_id)
 
         if existing:
             status = str(existing.get("status", "")).strip().lower()
@@ -644,14 +685,13 @@ def create_or_update_access_request(user_id: int, username: str, full_name: str)
         return "new_pending"
 
     except Exception as e:
-        print(f"Access request error: {e}")
+        logger.error("Access request error: %s", e)
         return "error"
 
 
-def approve_access(user_id: int, approved_by: int):
+def _approve_access_sync(user_id: int, approved_by: int):
     try:
-        sheet = get_access_sheet()
-        row_index, existing = find_access_row(sheet, user_id)
+        sheet, row_index, existing = _find_access_row_sync(user_id)
 
         if not existing:
             return False, "Заявка не найдена"
@@ -660,20 +700,16 @@ def approve_access(user_id: int, approved_by: int):
         sheet.update_cell(row_index, 6, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         sheet.update_cell(row_index, 7, str(approved_by))
 
-        ALLOWED_USERS.add(user_id)
-        pending_access_notifications.discard(user_id)
-
         return True, "Доступ выдан"
 
     except Exception as e:
-        print(f"Approve access error: {e}")
+        logger.error("Approve access error: %s", e)
         return False, str(e)
 
 
-def reject_access(user_id: int, rejected_by: int):
+def _reject_access_sync(user_id: int, rejected_by: int):
     try:
-        sheet = get_access_sheet()
-        row_index, existing = find_access_row(sheet, user_id)
+        sheet, row_index, existing = _find_access_row_sync(user_id)
 
         if not existing:
             return False, "Заявка не найдена"
@@ -682,17 +718,76 @@ def reject_access(user_id: int, rejected_by: int):
         sheet.update_cell(row_index, 6, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         sheet.update_cell(row_index, 7, str(rejected_by))
 
-        if user_id in ALLOWED_USERS and user_id != ADMIN_ID:
-            ALLOWED_USERS.remove(user_id)
-
-        pending_access_notifications.discard(user_id)
-
         return True, "Доступ отклонен"
 
     except Exception as e:
-        print(f"Reject access error: {e}")
+        logger.error("Reject access error: %s", e)
         return False, str(e)
 
+
+# ---- Асинхронные обёртки поверх синхронных вызовов gspread ----
+# Всё, что ходит в Google Sheets, выполняется в отдельном потоке через
+# asyncio.to_thread, чтобы не блокировать event loop и остальных пользователей бота.
+
+async def log_question_to_google_sheets(message: types.Message, question: str, mode: str):
+    username = message.from_user.username or "без username"
+    full_name = message.from_user.full_name or "без имени"
+
+    await asyncio.to_thread(
+        _log_question_sync,
+        str(message.from_user.id),
+        username,
+        full_name,
+        question,
+        mode,
+    )
+
+
+async def log_feedback_to_google_sheets(user, rating: str, comment: str = ""):
+    username = user.username or "без username"
+    full_name = user.full_name or "без имени"
+
+    return await asyncio.to_thread(
+        _log_feedback_sync, user.id, username, full_name, rating, comment
+    )
+
+
+async def save_internal_request_to_google_sheets(request_data, username, user_id):
+    return await asyncio.to_thread(_save_internal_request_sync, request_data, username, user_id)
+
+
+async def load_allowed_users_from_sheet():
+    return await asyncio.to_thread(_load_allowed_users_sync)
+
+
+async def create_or_update_access_request(user_id: int, username: str, full_name: str):
+    return await asyncio.to_thread(_create_or_update_access_request_sync, user_id, username, full_name)
+
+
+async def approve_access(user_id: int, approved_by: int):
+    success, result_text = await asyncio.to_thread(_approve_access_sync, user_id, approved_by)
+
+    if success:
+        ALLOWED_USERS.add(user_id)
+        pending_access_notifications.discard(user_id)
+
+    return success, result_text
+
+
+async def reject_access(user_id: int, rejected_by: int):
+    success, result_text = await asyncio.to_thread(_reject_access_sync, user_id, rejected_by)
+
+    if success:
+        if user_id in ALLOWED_USERS and user_id != ADMIN_ID:
+            ALLOWED_USERS.remove(user_id)
+        pending_access_notifications.discard(user_id)
+
+    return success, result_text
+
+
+# =========================================================
+# ДОСТУПЫ
+# =========================================================
 
 def is_allowed(user_id: int) -> bool:
     return user_id in ALLOWED_USERS or user_id == ADMIN_ID
@@ -703,7 +798,7 @@ async def deny_access(message: types.Message):
     username = message.from_user.username or "без username"
     full_name = message.from_user.full_name or "без имени"
 
-    request_status = create_or_update_access_request(
+    request_status = await create_or_update_access_request(
         user_id=user_id,
         username=username,
         full_name=full_name,
@@ -730,14 +825,14 @@ async def deny_access(message: types.Message):
             await bot.send_message(
                 ADMIN_ID,
                 f"⚠️ <b>Ошибка при создании заявки на доступ</b>\n\n"
-                f"Имя: {full_name}\n"
-                f"Username: @{username}\n"
+                f"Имя: {h(full_name)}\n"
+                f"Username: @{h(username)}\n"
                 f"Telegram ID: <code>{user_id}</code>\n\n"
                 f"Проверьте Google Sheets / GOOGLE_CREDENTIALS.",
                 parse_mode="HTML",
             )
         except Exception as e:
-            print(f"Admin notify error: {e}")
+            logger.error("Admin notify error: %s", e)
 
         return
 
@@ -771,15 +866,15 @@ async def deny_access(message: types.Message):
         await bot.send_message(
             ADMIN_ID,
             f"🔐 <b>Новая заявка на доступ к боту</b>\n\n"
-            f"Имя: {full_name}\n"
-            f"Username: @{username}\n"
+            f"Имя: {h(full_name)}\n"
+            f"Username: @{h(username)}\n"
             f"Telegram ID: <code>{user_id}</code>\n\n"
             f"Одобрить доступ?",
             parse_mode="HTML",
             reply_markup=keyboard,
         )
     except Exception as e:
-        print(f"Admin notify error: {e}")
+        logger.error("Admin notify error: %s", e)
 
 
 # =========================================================
@@ -787,14 +882,18 @@ async def deny_access(message: types.Message):
 # =========================================================
 
 def find_service(text: str):
-    text = text.lower().strip()
+    text_lower = text.lower().strip()
 
     for service in services:
-        if service["name"].lower() == text:
+        if service["name"].lower() == text_lower:
             return service
 
+    # Ищем совпадение алиаса как отдельного слова/фразы, а не произвольной подстроки,
+    # чтобы короткие алиасы (например "тв") не матчились внутри других слов.
+    for service in services:
         for alias in service["aliases"]:
-            if alias in text:
+            pattern = r"\b" + re.escape(alias) + r"\b"
+            if re.search(pattern, text_lower):
                 return service
 
     return None
@@ -946,6 +1045,62 @@ def format_ai_answer_for_telegram(raw_answer: str) -> str:
     return clean_text
 
 
+AI_ANSWER_FOOTER = (
+    "\n\n———\n"
+    "⚠️ Если вопрос связан с ценой, нестандартной методологией, юридическими ограничениями "
+    "или клиентскими данными — лучше дополнительно сверить ответ с ответственным экспертом."
+)
+
+
+async def process_presale_question(message: types.Message, question: str, mode: str):
+    """Единая точка обработки presale-вопроса — используется и командой /ai,
+    и кнопкой «Задать presale-вопрос», чтобы не дублировать логику."""
+
+    await message.answer("⏳ Готовлю presale-ответ...")
+
+    try:
+        await log_question_to_google_sheets(message, question, mode)
+
+        raw_answer = await asyncio.wait_for(
+            ask_stack_ai(user_text=make_presale_prompt(question), user_id=message.from_user.id),
+            timeout=STACK_AI_TIMEOUT_SECONDS,
+        )
+
+        answer = format_ai_answer_for_telegram(raw_answer)
+
+        last_ai_answers[message.from_user.id] = {
+            "question": question,
+            "answer": answer,
+            "mode": mode,
+        }
+
+        await message.answer(
+            answer + AI_ANSWER_FOOTER,
+            reply_markup=feedback_kb,
+        )
+
+        await message.answer(
+            "Выберите следующий раздел:",
+            reply_markup=main_kb,
+        )
+
+    except asyncio.TimeoutError:
+        logger.warning("Stack AI timeout for user_id=%s", message.from_user.id)
+        await message.answer(
+            "⚠️ AI-модуль отвечает дольше обычного и не успел ответить вовремя.\n\n"
+            "Попробуйте ещё раз чуть позже или передайте вопрос эксперту.",
+            reply_markup=main_kb,
+        )
+
+    except Exception as e:
+        logger.exception("Stack AI error: %s", e)
+        await message.answer(
+            "⚠️ Не удалось получить ответ от AI-модуля.\n\n"
+            "Попробуйте позже или передайте вопрос эксперту.",
+            reply_markup=main_kb,
+        )
+
+
 # =========================================================
 # CALLBACK: FEEDBACK
 # =========================================================
@@ -957,7 +1112,7 @@ async def handle_feedback_callback(callback: CallbackQuery):
         return
 
     if callback.data == "feedback_good":
-        success = log_feedback_to_google_sheets(
+        success = await log_feedback_to_google_sheets(
             user=callback.from_user,
             rating="good",
             comment="",
@@ -969,7 +1124,7 @@ async def handle_feedback_callback(callback: CallbackQuery):
             try:
                 await callback.message.edit_reply_markup(reply_markup=None)
             except Exception as e:
-                print(f"Feedback keyboard remove error: {e}")
+                logger.warning("Feedback keyboard remove error: %s", e)
 
             await callback.message.answer(
                 "Спасибо за обратную связь: 👍 Полезно.\n\n"
@@ -989,7 +1144,7 @@ async def handle_feedback_callback(callback: CallbackQuery):
         try:
             await callback.message.edit_reply_markup(reply_markup=None)
         except Exception as e:
-            print(f"Feedback keyboard remove error: {e}")
+            logger.warning("Feedback keyboard remove error: %s", e)
 
         await callback.message.answer(
             "Что именно нужно доработать в ответе?",
@@ -1018,7 +1173,7 @@ async def handle_access_callback(callback: CallbackQuery):
         return
 
     if action == "access_approve":
-        success, result_text = approve_access(
+        success, result_text = await approve_access(
             user_id=target_user_id,
             approved_by=callback.from_user.id,
         )
@@ -1039,13 +1194,13 @@ async def handle_access_callback(callback: CallbackQuery):
                     "Напишите /start, чтобы открыть меню.",
                 )
             except Exception as e:
-                print(f"User notify error: {e}")
+                logger.warning("User notify error: %s", e)
 
         else:
             await callback.answer(f"Ошибка: {result_text}", show_alert=True)
 
     elif action == "access_reject":
-        success, result_text = reject_access(
+        success, result_text = await reject_access(
             user_id=target_user_id,
             rejected_by=callback.from_user.id,
         )
@@ -1065,7 +1220,7 @@ async def handle_access_callback(callback: CallbackQuery):
                     "❌ Заявка на доступ к боту отклонена.",
                 )
             except Exception as e:
-                print(f"User notify error: {e}")
+                logger.warning("User notify error: %s", e)
 
         else:
             await callback.answer(f"Ошибка: {result_text}", show_alert=True)
@@ -1083,8 +1238,8 @@ async def my_id(message: types.Message):
     await message.answer(
         f"Ваш Telegram ID:\n"
         f"<code>{message.from_user.id}</code>\n\n"
-        f"Имя: {full_name}\n"
-        f"Username: @{username}",
+        f"Имя: {h(full_name)}\n"
+        f"Username: @{h(username)}",
         parse_mode="HTML",
     )
 
@@ -1107,7 +1262,7 @@ async def status(message: types.Message):
     uptime = datetime.now() - START_TIME
 
     try:
-        get_access_sheet()
+        await asyncio.to_thread(get_access_sheet)
         google_status = "✅ Google Sheets подключен"
     except Exception as e:
         google_status = f"⚠️ Google Sheets ошибка: {e}"
@@ -1117,6 +1272,7 @@ async def status(message: types.Message):
         f"Версия: {BOT_VERSION}\n"
         f"Запущен: {START_TIME.strftime('%Y-%m-%d %H:%M:%S')}\n"
         f"Время работы: {str(uptime).split('.')[0]}\n"
+        f"Пользователей с доступом: {len(ALLOWED_USERS)}\n"
         f"{google_status}",
         parse_mode="HTML",
     )
@@ -1138,44 +1294,7 @@ async def ai_consultant(message: types.Message):
         )
         return
 
-    await message.answer("⏳ Готовлю presale-ответ...")
-
-    try:
-        log_question_to_google_sheets(message, question, "command_ai")
-
-        raw_answer = await ask_stack_ai(
-            user_text=make_presale_prompt(question),
-            user_id=message.from_user.id,
-        )
-
-        answer = format_ai_answer_for_telegram(raw_answer)
-
-        last_ai_answers[message.from_user.id] = {
-            "question": question,
-            "answer": answer,
-            "mode": "command_ai",
-        }
-
-        await message.answer(
-            answer + "\n\n"
-            "———\n"
-            "⚠️ Если вопрос связан с ценой, нестандартной методологией, юридическими ограничениями "
-            "или клиентскими данными — лучше дополнительно сверить ответ с ответственным экспертом.",
-            reply_markup=feedback_kb,
-        )
-
-        await message.answer(
-            "Выберите следующий раздел:",
-            reply_markup=main_kb,
-        )
-
-    except Exception as e:
-        print(f"Stack AI error: {e}")
-        await message.answer(
-            "⚠️ Не удалось получить ответ от AI-модуля.\n\n"
-            "Попробуйте позже или передайте вопрос эксперту.",
-            reply_markup=main_kb,
-        )
+    await process_presale_question(message, question, mode="command_ai")
 
 
 # =========================================================
@@ -1236,7 +1355,7 @@ async def handle_message(message: types.Message):
             )
             return
 
-        success = log_feedback_to_google_sheets(
+        success = await log_feedback_to_google_sheets(
             user=message.from_user,
             rating="bad",
             comment=text,
@@ -1258,7 +1377,7 @@ async def handle_message(message: types.Message):
         return
 
     if user_states.get(user_id) == "feedback_free_comment":
-        success = log_feedback_to_google_sheets(
+        success = await log_feedback_to_google_sheets(
             user=message.from_user,
             rating="bad",
             comment=text,
@@ -1284,46 +1403,8 @@ async def handle_message(message: types.Message):
     # =====================================================
 
     if user_states.get(user_id) == "ai_question":
-        await message.answer("⏳ Готовлю presale-ответ...")
-
-        try:
-            log_question_to_google_sheets(message, text, "button_ai")
-
-            raw_answer = await ask_stack_ai(
-                user_text=make_presale_prompt(text),
-                user_id=message.from_user.id,
-            )
-
-            answer = format_ai_answer_for_telegram(raw_answer)
-
-            last_ai_answers[user_id] = {
-                "question": text,
-                "answer": answer,
-                "mode": "button_ai",
-            }
-
-            await message.answer(
-                answer + "\n\n"
-                "———\n"
-                "⚠️ Если вопрос связан с ценой, нестандартной методологией, юридическими ограничениями "
-                "или клиентскими данными — лучше дополнительно сверить ответ с ответственным экспертом.",
-                reply_markup=feedback_kb,
-            )
-
-            await message.answer(
-                "Выберите следующий раздел:",
-                reply_markup=main_kb,
-            )
-
-        except Exception as e:
-            print(f"Stack AI error: {e}")
-            await message.answer(
-                "⚠️ Не удалось получить ответ от AI-модуля.\n\n"
-                "Попробуйте позже или передайте вопрос эксперту.",
-                reply_markup=main_kb,
-            )
-
         user_states[user_id] = None
+        await process_presale_question(message, text, mode="button_ai")
         return
 
     # =====================================================
@@ -1382,13 +1463,13 @@ async def handle_message(message: types.Message):
                 await bot.send_message(
                     ADMIN_ID,
                     f"❗ <b>Нераспознанный запрос на подбор услуги</b>\n\n"
-                    f"От: @{username}\n"
+                    f"От: @{h(username)}\n"
                     f"Telegram ID: <code>{user_id}</code>\n"
-                    f"Текст: {text}",
+                    f"Текст: {h(text)}",
                     parse_mode="HTML",
                 )
             except Exception as e:
-                print(f"Admin notify error: {e}")
+                logger.warning("Admin notify error: %s", e)
 
         user_states[user_id] = None
         return
@@ -1443,7 +1524,7 @@ async def handle_message(message: types.Message):
         username = message.from_user.username or "без username"
         request_data = user_requests[user_id]
 
-        sheet_status = save_internal_request_to_google_sheets(request_data, username, user_id)
+        sheet_status = await save_internal_request_to_google_sheets(request_data, username, user_id)
 
         await message.answer(
             "✅ Запрос передан эксперту.\n\n"
@@ -1455,17 +1536,17 @@ async def handle_message(message: types.Message):
             await bot.send_message(
                 ADMIN_ID,
                 f"📌 <b>Нестандартный запрос из внутреннего бота</b>\n\n"
-                f"👤 Имя: {request_data.get('name')}\n"
-                f"🧩 Роль: {request_data.get('role')}\n"
-                f"🏢 Клиент / категория: {request_data.get('client')}\n"
-                f"📌 Задача: {request_data.get('task')}\n"
-                f"☎️ Контакт: {request_data.get('contact')}\n"
-                f"🔗 Telegram: @{username}\n"
+                f"👤 Имя: {h(str(request_data.get('name', '')))}\n"
+                f"🧩 Роль: {h(str(request_data.get('role', '')))}\n"
+                f"🏢 Клиент / категория: {h(str(request_data.get('client', '')))}\n"
+                f"📌 Задача: {h(str(request_data.get('task', '')))}\n"
+                f"☎️ Контакт: {h(str(request_data.get('contact', '')))}\n"
+                f"🔗 Telegram: @{h(username)}\n"
                 f"🧾 Таблица: {sheet_status}",
                 parse_mode="HTML",
             )
         except Exception as e:
-            print(f"Admin notify error: {e}")
+            logger.warning("Admin notify error: %s", e)
 
         user_states[user_id] = None
         user_requests[user_id] = {}
@@ -1618,6 +1699,7 @@ async def handle_message(message: types.Message):
                     caption=material["caption"],
                 )
             except Exception as e:
+                logger.error("Send material error (%s): %s", material["title"], e)
                 await message.answer(
                     f"⚠️ Не удалось отправить файл: {material['title']}\n"
                     f"Ошибка: {e}"
@@ -1629,12 +1711,12 @@ async def handle_message(message: types.Message):
             await bot.send_message(
                 ADMIN_ID,
                 f"📎 <b>Пользователь запросил материалы</b>\n\n"
-                f"От: @{username}\n"
+                f"От: @{h(username)}\n"
                 f"Telegram ID: <code>{user_id}</code>",
                 parse_mode="HTML",
             )
         except Exception as e:
-            print(f"Admin notify error: {e}")
+            logger.warning("Admin notify error: %s", e)
 
         return
 
@@ -1720,10 +1802,10 @@ async def handle_message(message: types.Message):
 async def main():
     global ALLOWED_USERS
 
-    ALLOWED_USERS = load_allowed_users_from_sheet()
+    ALLOWED_USERS = await load_allowed_users_from_sheet()
 
-    print(f"Loaded allowed users: {ALLOWED_USERS}")
-    print(f"Bot version: {BOT_VERSION}")
+    logger.info("Loaded allowed users: %s", ALLOWED_USERS)
+    logger.info("Bot version: %s", BOT_VERSION)
 
     await dp.start_polling(bot)
 
