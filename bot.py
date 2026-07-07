@@ -4,6 +4,7 @@ import os
 import json
 import re
 import html
+from collections import deque
 from datetime import datetime
 from html import escape as h
 
@@ -57,6 +58,10 @@ START_TIME = datetime.now()
 
 STACK_AI_TIMEOUT_SECONDS = 30
 
+# Сколько последних пар «вопрос-ответ» бот помнит в рамках AI-диалога.
+# Контекст сбрасывается по /start или «⬅️ В главное меню».
+DIALOG_HISTORY_DEPTH = 3
+
 # Порт для health-check веб-сервера.
 # Render передает PORT автоматически; локально будет 8080.
 HEALTH_PORT = int(os.getenv("PORT", "8080"))
@@ -75,6 +80,10 @@ dp = Dispatcher()
 user_states = {}
 user_requests = {}
 last_ai_answers = {}
+
+# История AI-диалога: user_id -> deque[{"q": вопрос, "a": ответ}]
+# Позволяет боту понимать уточнения вида «а сколько это стоит?»
+dialog_history = {}
 
 ALLOWED_USERS = {ADMIN_ID}
 pending_access_notifications = set()
@@ -402,7 +411,15 @@ feedback_kb = InlineKeyboardMarkup(
         [
             InlineKeyboardButton(text="👍 Полезно", callback_data="feedback_good"),
             InlineKeyboardButton(text="👎 Нужна доработка", callback_data="feedback_bad"),
-        ]
+        ],
+        [
+            InlineKeyboardButton(text="📥 Какие вводные нужны", callback_data="followup_inputs"),
+            InlineKeyboardButton(text="💬 Формулировка клиенту", callback_data="followup_pitch"),
+        ],
+        [
+            InlineKeyboardButton(text="🚫 Ограничения", callback_data="followup_limits"),
+            InlineKeyboardButton(text="🔄 Переформулировать", callback_data="followup_retry"),
+        ],
     ]
 )
 
@@ -735,13 +752,13 @@ def _reject_access_sync(user_id: int, rejected_by: int):
 # Всё, что ходит в Google Sheets, выполняется в отдельном потоке через
 # asyncio.to_thread, чтобы не блокировать event loop и остальных пользователей бота.
 
-async def log_question_to_google_sheets(message: types.Message, question: str, mode: str):
-    username = message.from_user.username or "без username"
-    full_name = message.from_user.full_name or "без имени"
+async def log_question_to_google_sheets(user: types.User, question: str, mode: str):
+    username = user.username or "без username"
+    full_name = user.full_name or "без имени"
 
     await asyncio.to_thread(
         _log_question_sync,
-        str(message.from_user.id),
+        str(user.id),
         username,
         full_name,
         question,
@@ -965,20 +982,61 @@ def start_internal_request_flow(user_id):
     user_requests[user_id] = {}
 
 
-def make_presale_prompt(question: str) -> str:
+def build_dialog_context(user_id: int) -> str:
+    """Собирает контекст последних вопросов-ответов, чтобы AI понимал уточнения
+    вида «а сколько это стоит?» без повторения всей задачи."""
+    history = dialog_history.get(user_id)
+
+    if not history:
+        return ""
+
+    parts = []
+    for item in history:
+        q = item.get("q", "")[:400]
+        a = item.get("a", "")[:800]
+        parts.append(f"Предыдущий вопрос сотрудника: {q}\nТвой предыдущий ответ (сокращенно): {a}")
+
+    return (
+        "Контекст текущего диалога (используй его, если новый вопрос — уточнение к предыдущим; "
+        "если новый вопрос на другую тему — контекст можно игнорировать):\n"
+        + "\n---\n".join(parts)
+        + "\n\n"
+    )
+
+
+def remember_dialog(user_id: int, question: str, answer: str):
+    history = dialog_history.setdefault(user_id, deque(maxlen=DIALOG_HISTORY_DEPTH))
+    history.append({"q": question, "a": answer})
+
+
+def reset_dialog(user_id: int):
+    dialog_history.pop(user_id, None)
+
+
+def make_presale_prompt(question: str, user_id: int, focus: str = "") -> str:
+    focus_instruction = f"{focus}\n" if focus else ""
+
     return (
         "Ты внутренний presale-ассистент МТС Ads Adviser для сотрудников МТС РТ: сейлзов, аккаунтов, CSM и аналитиков.\n"
         "Отвечай профессионально, структурно и аккуратно. Не выдумывай факты, цены, сроки и кейсы.\n"
         "Если данных недостаточно — честно напиши, какие вводные нужно уточнить.\n"
         "Не вставляй ссылки на источники, номера документов, ID чанков, служебные коды, цитаты в квадратных скобках.\n"
         "Не используй markdown-разметку со звездочками. Пиши обычным чистым текстом для Telegram.\n"
-        "В ответе желательно использовать структуру:\n"
-        "1. Короткий вывод\n"
-        "2. Что предложить клиенту\n"
-        "3. Какие вводные запросить\n"
-        "4. Как объяснить клиенту простыми словами\n"
-        "5. Ограничения / что не обещать\n\n"
-        f"Вопрос сотрудника:\n{question}"
+        + focus_instruction
+        + (
+            ""
+            if focus
+            else (
+                "В ответе желательно использовать структуру:\n"
+                "1. Короткий вывод\n"
+                "2. Что предложить клиенту\n"
+                "3. Какие вводные запросить\n"
+                "4. Как объяснить клиенту простыми словами\n"
+                "5. Ограничения / что не обещать\n\n"
+            )
+        )
+        + build_dialog_context(user_id)
+        + f"Вопрос сотрудника:\n{question}"
     )
 
 
@@ -1058,40 +1116,50 @@ AI_ANSWER_FOOTER = (
 )
 
 
-async def process_presale_question(message: types.Message, question: str, mode: str):
-    """Единая точка обработки presale-вопроса — используется и командой /ai,
-    и кнопкой «Задать presale-вопрос», чтобы не дублировать логику."""
+async def process_presale_question(
+    message: types.Message,
+    question: str,
+    mode: str,
+    focus: str = "",
+    user: types.User = None,
+):
+    """Единая точка обработки presale-вопроса: команда /ai, кнопка меню и follow-up кнопки.
+
+    user передается явно, потому что при вызове из callback-кнопки
+    message.from_user — это бот, а не человек."""
+
+    user = user or message.from_user
 
     await message.answer("⏳ Готовлю presale-ответ...")
 
     try:
-        await log_question_to_google_sheets(message, question, mode)
+        await log_question_to_google_sheets(user, question, mode)
 
         raw_answer = await asyncio.wait_for(
-            ask_stack_ai(user_text=make_presale_prompt(question), user_id=message.from_user.id),
+            ask_stack_ai(
+                user_text=make_presale_prompt(question, user_id=user.id, focus=focus),
+                user_id=user.id,
+            ),
             timeout=STACK_AI_TIMEOUT_SECONDS,
         )
 
         answer = format_ai_answer_for_telegram(raw_answer)
 
-        last_ai_answers[message.from_user.id] = {
+        last_ai_answers[user.id] = {
             "question": question,
             "answer": answer,
             "mode": mode,
         }
+
+        remember_dialog(user.id, question, answer)
 
         await message.answer(
             answer + AI_ANSWER_FOOTER,
             reply_markup=feedback_kb,
         )
 
-        await message.answer(
-            "Выберите следующий раздел:",
-            reply_markup=main_kb,
-        )
-
     except asyncio.TimeoutError:
-        logger.warning("Stack AI timeout for user_id=%s", message.from_user.id)
+        logger.warning("Stack AI timeout for user_id=%s", user.id)
         await message.answer(
             "⚠️ AI-модуль отвечает дольше обычного и не успел ответить вовремя.\n\n"
             "Попробуйте ещё раз чуть позже или передайте вопрос эксперту.",
@@ -1105,6 +1173,66 @@ async def process_presale_question(message: types.Message, question: str, mode: 
             "Попробуйте позже или передайте вопрос эксперту.",
             reply_markup=main_kb,
         )
+
+
+# =========================================================
+# CALLBACK: FOLLOW-UP КНОПКИ ПОСЛЕ AI-ОТВЕТА
+# =========================================================
+
+FOLLOWUP_FOCUS = {
+    "followup_inputs": (
+        "Сейчас сотрудник нажал кнопку «Какие вводные нужны». "
+        "Дай ТОЛЬКО детальный список вводных, которые нужно запросить у клиента по этой задаче, "
+        "с коротким пояснением, зачем нужна каждая вводная. Без остальных разделов."
+    ),
+    "followup_pitch": (
+        "Сейчас сотрудник нажал кнопку «Формулировка клиенту». "
+        "Дай ТОЛЬКО готовую формулировку для клиента: 2-4 варианта фраз, которые сейлз может "
+        "произнести или написать клиенту дословно. Профессионально, без внутреннего жаргона. Без остальных разделов."
+    ),
+    "followup_limits": (
+        "Сейчас сотрудник нажал кнопку «Ограничения». "
+        "Дай ТОЛЬКО список ограничений и того, что нельзя обещать клиенту по этой задаче, "
+        "с пояснением, как аккуратно проговорить каждое ограничение. Без остальных разделов."
+    ),
+    "followup_retry": (
+        "Сейчас сотрудник нажал кнопку «Переформулировать»: предыдущий ответ его не устроил. "
+        "Ответь на тот же вопрос заново — другими словами, с другой структурой подачи и, если возможно, глубже. "
+        "Не повторяй формулировки из предыдущего ответа."
+    ),
+}
+
+
+@dp.callback_query(lambda callback: callback.data and callback.data.startswith("followup_"))
+async def handle_followup_callback(callback: CallbackQuery):
+    if not is_allowed(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+
+    last = last_ai_answers.get(callback.from_user.id)
+
+    if not last or not last.get("question"):
+        await callback.answer(
+            "Не нашел предыдущий вопрос (возможно, бот перезапускался). Задайте вопрос заново.",
+            show_alert=True,
+        )
+        return
+
+    focus = FOLLOWUP_FOCUS.get(callback.data)
+
+    if not focus:
+        await callback.answer("Неизвестное действие", show_alert=True)
+        return
+
+    await callback.answer("Готовлю уточнение...")
+
+    await process_presale_question(
+        callback.message,
+        question=last["question"],
+        mode=callback.data,
+        focus=focus,
+        user=callback.from_user,
+    )
 
 
 # =========================================================
@@ -1330,6 +1458,7 @@ async def handle_message(message: types.Message):
 
     if text == "/start" or text == "⬅️ В главное меню":
         user_states[user_id] = None
+        reset_dialog(user_id)
 
         await message.answer(
             "👋 Привет! Я внутренний presale-ассистент <b>MTS Ads Adviser</b>.\n\n"
@@ -1569,6 +1698,8 @@ async def handle_message(message: types.Message):
 
         await message.answer(
             "Напишите вопрос по presale, продуктам, методологии или клиентской задаче.\n\n"
+            "Я помню контекст диалога: после ответа можно уточнять прямо текстом — "
+            "«а сколько это стоит?», «а какие сроки?» — или нажимать кнопки под ответом.\n\n"
             "Например:\n"
             "— Клиент хочет оценить эффективность наружки, что предложить?\n"
             "— Чем Brand Lift отличается от конверсионного анализа?\n"
@@ -1795,6 +1926,18 @@ async def handle_message(message: types.Message):
     # =====================================================
     # FALLBACK
     # =====================================================
+
+    # Если у пользователя есть активный AI-диалог — любой нераспознанный текст
+    # считаем уточнением и продолжаем диалог (работает память контекста).
+    # Если диалога нет, но текст похож на осмысленный вопрос — тоже отдаем в AI,
+    # чтобы не отправлять человека в тупик.
+    if dialog_history.get(user_id):
+        await process_presale_question(message, text, mode="dialog_followup")
+        return
+
+    if len(text) >= 15:
+        await process_presale_question(message, text, mode="fallback_ai")
+        return
 
     await message.answer(
         "Я пока не понял запрос.\n\n"
