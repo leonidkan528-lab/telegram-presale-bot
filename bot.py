@@ -21,18 +21,6 @@ from aiogram.types import (
     CallbackQuery,
 )
 
-
-# =========================================================
-# КОНФИГУРАЦИЯ
-# =========================================================
-# В Render → Environment должны быть:
-# BOT_TOKEN=...
-# ADMIN_ID=...
-# GOOGLE_CREDENTIALS=...
-# MTS_LINK_URL=...
-# GOOGLE_SHEET_NAME=Telegram Leads
-# =========================================================
-
 TOKEN = "7975259132:AAGz94yL-7K-UDOReGNL0yjAzSd8P3L5seE"
 ADMIN_ID = 237014151
 MTS_LINK_URL = "https://mts.mts-link.ru/j/164981661/18742977822/stream-new/17925578984"
@@ -48,11 +36,6 @@ START_TIME = datetime.now()
 
 if not TOKEN:
     raise ValueError("BOT_TOKEN не найден. Добавьте BOT_TOKEN в Render Environment Variables.")
-
-try:
-    ADMIN_ID = int(str(ADMIN_ID_RAW).strip())
-except Exception:
-    raise ValueError("ADMIN_ID не найден или задан неверно. Добавьте ADMIN_ID в Render Environment Variables.")
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
