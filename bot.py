@@ -410,15 +410,21 @@ feedback_kb = InlineKeyboardMarkup(
     inline_keyboard=[
         [
             InlineKeyboardButton(text="👍 Полезно", callback_data="feedback_good"),
-            InlineKeyboardButton(text="👎 Нужна доработка", callback_data="feedback_bad"),
+            InlineKeyboardButton(text="👎 Доработать", callback_data="feedback_bad"),
         ],
+        # Каждая follow-up кнопка занимает целый ряд, чтобы подпись не обрезалась
+        # на узких экранах (например, iPhone 13 mini).
         [
             InlineKeyboardButton(text="📥 Какие вводные нужны", callback_data="followup_inputs"),
-            InlineKeyboardButton(text="💬 Формулировка клиенту", callback_data="followup_pitch"),
+        ],
+        [
+            InlineKeyboardButton(text="💬 Формулировка для клиента", callback_data="followup_pitch"),
         ],
         [
             InlineKeyboardButton(text="🚫 Ограничения", callback_data="followup_limits"),
-            InlineKeyboardButton(text="🔄 Переформулировать", callback_data="followup_retry"),
+        ],
+        [
+            InlineKeyboardButton(text="🔄 Переформулировать ответ", callback_data="followup_retry"),
         ],
     ]
 )
@@ -1021,18 +1027,27 @@ def make_presale_prompt(question: str, user_id: int, focus: str = "") -> str:
         "Отвечай профессионально, структурно и аккуратно. Не выдумывай факты, цены, сроки и кейсы.\n"
         "Если данных недостаточно — честно напиши, какие вводные нужно уточнить.\n"
         "Не вставляй ссылки на источники, номера документов, ID чанков, служебные коды, цитаты в квадратных скобках.\n"
-        "Не используй markdown-разметку со звездочками. Пиши обычным чистым текстом для Telegram.\n"
+        "Не используй markdown со звездочками (* или **) и решетками (#).\n"
+        "Заголовки разделов и названия продуктов выделяй ТОЛЬКО HTML-тегами <b>...</b> "
+        "(например: <b>2. Что предложить клиенту</b>, <b>Brand Lift</b>). Другие HTML-теги не используй.\n"
         + focus_instruction
         + (
             ""
             if focus
             else (
-                "В ответе желательно использовать структуру:\n"
+                "Используй такую структуру ответа (каждый заголовок оберни в <b>...</b>):\n"
                 "1. Короткий вывод\n"
-                "2. Что предложить клиенту\n"
-                "3. Какие вводные запросить\n"
+                "2. Что предложить клиенту. Раздели предложение на две части:\n"
+                "   а) Аналитика рекламных кампаний — оценка эффективности РК в каналах "
+                "(Digital: Brand Lift, конверсионный анализ, cross-digital; OOH/DOOH; ТВ-аналитика; доходимость до офлайн-точек).\n"
+                "   б) Исследование аудитории без привязки к рекламной кампании — профилирование ЦА, "
+                "анализ конкурентов, тепловые карты на основе Big Data МТС.\n"
+                "   Внутри каждого продукта коротко поясни, что он показывает.\n"
+                "3. Какие вводные запросить у клиента\n"
                 "4. Как объяснить клиенту простыми словами\n"
-                "5. Ограничения / что не обещать\n\n"
+                "5. Ограничения / что не обещать. В конце этого раздела ОБЯЗАТЕЛЬНО добавь строку: "
+                "«Если вопрос связан с ценой, нестандартной методологией, юридическими ограничениями "
+                "или клиентскими данными — сверьте ответ с ответственным экспертом: ads.research@mts.ru».\n\n"
             )
         )
         + build_dialog_context(user_id)
@@ -1044,11 +1059,16 @@ def clean_ai_answer(raw_answer: str) -> str:
     """
     Убирает из ответа Stack AI служебные ссылки на источники,
     странные цифровые хвосты, markdown-звездочки и HTML-сущности.
+    Теги <b>...</b> (которыми AI выделяет заголовки) сохраняются.
     """
     if not raw_answer:
         return ""
 
     text = str(raw_answer)
+
+    # Защищаем валидные b-теги плейсхолдерами, чтобы html.unescape и чистка их не тронули
+    text = re.sub(r"<\s*b\s*>", "\x00BOPEN\x00", text, flags=re.IGNORECASE)
+    text = re.sub(r"<\s*/\s*b\s*>", "\x00BCLOSE\x00", text, flags=re.IGNORECASE)
 
     # Раскодировать HTML-сущности типа &quot;, &#x27; и т.п.
     text = html.unescape(text)
@@ -1097,7 +1117,27 @@ def clean_ai_answer(raw_answer: str) -> str:
     text = re.sub(r" +\n", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
 
+    # Возвращаем защищенные b-теги обратно
+    text = text.replace("\x00BOPEN\x00", "<b>").replace("\x00BCLOSE\x00", "</b>")
+
     return text.strip()
+
+
+def safe_html_for_telegram(text: str) -> str:
+    """
+    Готовит текст к отправке с parse_mode=HTML: экранирует все спецсимволы
+    (<, >, &), чтобы случайные символы вроде «CTR < 1%» не сломали парсинг,
+    и возвращает рабочими только наши <b>...</b> теги.
+    """
+    if not text:
+        return ""
+
+    # Экранируем весь текст целиком
+    escaped = html.escape(text, quote=False)
+    # Возвращаем только b-теги (после escape они выглядят как &lt;b&gt;)
+    escaped = escaped.replace("&lt;b&gt;", "<b>").replace("&lt;/b&gt;", "</b>")
+
+    return escaped
 
 
 def format_ai_answer_for_telegram(raw_answer: str) -> str:
@@ -1111,8 +1151,8 @@ def format_ai_answer_for_telegram(raw_answer: str) -> str:
 
 AI_ANSWER_FOOTER = (
     "\n\n———\n"
-    "⚠️ Если вопрос связан с ценой, нестандартной методологией, юридическими ограничениями "
-    "или клиентскими данными — лучше дополнительно сверить ответ с ответственным экспертом."
+    "⚠️ Это presale-подсказка. Финальные цены, сроки и нестандартную методологию "
+    "сверяйте с ответственным экспертом."
 )
 
 
@@ -1153,10 +1193,20 @@ async def process_presale_question(
 
         remember_dialog(user.id, question, answer)
 
-        await message.answer(
-            answer + AI_ANSWER_FOOTER,
-            reply_markup=feedback_kb,
-        )
+        full_answer = answer + AI_ANSWER_FOOTER
+
+        # Пытаемся отправить с жирными заголовками (HTML). Если Telegram отклонит
+        # разметку (редкий случай с необычными символами) — шлём обычным текстом.
+        try:
+            await message.answer(
+                safe_html_for_telegram(full_answer),
+                parse_mode="HTML",
+                reply_markup=feedback_kb,
+            )
+        except Exception as html_error:
+            logger.warning("HTML send failed, fallback to plain text: %s", html_error)
+            plain = full_answer.replace("<b>", "").replace("</b>", "")
+            await message.answer(plain, reply_markup=feedback_kb)
 
     except asyncio.TimeoutError:
         logger.warning("Stack AI timeout for user_id=%s", user.id)
@@ -1563,11 +1613,23 @@ async def handle_message(message: types.Message):
                 reply_markup=main_kb,
             )
         else:
+            # Продукт не распознан по названию — не отправляем в тупик,
+            # а сразу отвечаем через AI по описанию задачи.
             await message.answer(
-                "Не смог точно определить продукт по описанию.\n\n"
-                "Лучше нажмите «🤖 Задать presale-вопрос» и опишите клиентскую задачу подробнее.",
-                reply_markup=main_kb,
+                "Не нашел точного совпадения по названию продукта — "
+                "отвечаю по сути вашего описания."
             )
+            user_states[user_id] = None
+            await process_presale_question(
+                message,
+                text,
+                mode="client_explain_ai",
+                focus=(
+                    "Сотрудник просит помочь объяснить продукт клиенту. "
+                    "Сделай упор на понятную формулировку для клиента и на то, какие вводные у него запросить."
+                ),
+            )
+            return
 
         user_states[user_id] = None
         return
@@ -1760,7 +1822,10 @@ async def handle_message(message: types.Message):
             "и дать выводы для оптимизации следующих размещений.\n\n"
             "<b>5. “Что нужно для старта?”</b>\n"
             "Минимально: задача клиента, период кампании, каналы, география, аудитория и целевое действие. "
-            "Для части задач нужны адреса точек, CRM, лиды или события.",
+            "Для части задач нужны адреса точек, CRM, лиды или события.\n\n"
+            "———\n"
+            "Не нашли ответ или у клиента есть возражение, которого здесь нет? "
+            "Напишите в центр исследований: ads.research@mts.ru",
             parse_mode="HTML",
             reply_markup=main_kb,
         )
