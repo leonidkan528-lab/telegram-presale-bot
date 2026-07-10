@@ -45,6 +45,9 @@ logger = logging.getLogger("mts_ads_adviser")
 # это единственное место в файле, которое сознательно не меняется сейчас.
 TOKEN = "7975259132:AAGz94yL-7K-UDOReGNL0yjAzSd8P3L5seE"
 ADMIN_ID = 237014151
+# Не используется: запись на встречу теперь идёт через сбор заявки боту
+# (тема → время → контакт), а не через ссылку на комнату MTS Link.
+# Оставлено на случай, если понадобится вернуть прямую ссылку.
 MTS_LINK_URL = "https://mts.mts-link.ru/j/164981661/18742977822/stream-new/17925578984"
 
 GOOGLE_SHEET_NAME = "Telegram Leads"
@@ -400,7 +403,7 @@ main_kb = ReplyKeyboardMarkup(
         [KeyboardButton(text="💬 Как объяснить клиенту"), KeyboardButton(text="❓ Возражения и FAQ")],
         [KeyboardButton(text="🚫 Что нельзя обещать"), KeyboardButton(text="📎 Материалы")],
         [KeyboardButton(text="💰 Цены и сроки"), KeyboardButton(text="🆚 Сравнить продукты")],
-        [KeyboardButton(text="📅 Записаться в MTS Link")],
+        [KeyboardButton(text="📅 Записаться на встречу")],
         [KeyboardButton(text="📌 Нестандартный запрос")],
     ],
     resize_keyboard=True,
@@ -1851,6 +1854,83 @@ async def handle_message(message: types.Message):
         return
 
     # =====================================================
+    # ЗАПИСЬ НА ВСТРЕЧУ (заявка эксперту)
+    # =====================================================
+
+    if user_states.get(user_id) == "meeting_topic":
+        user_requests[user_id]["topic"] = text
+        user_states[user_id] = "meeting_time"
+
+        await message.answer(
+            "Когда вам <b>удобно встретиться</b>?\n\n"
+            "Напишите желаемые дни и время, например:\n"
+            "«завтра после 15:00» или «в четверг-пятницу в первой половине дня».",
+            parse_mode="HTML",
+        )
+        return
+
+    if user_states.get(user_id) == "meeting_time":
+        user_requests[user_id]["time"] = text
+        user_states[user_id] = "meeting_contact"
+
+        await message.answer(
+            "Как с вами связаться для подтверждения?\n\n"
+            "Можно указать Telegram, рабочую почту или просто написать «в Telegram»."
+        )
+        return
+
+    if user_states.get(user_id) == "meeting_contact":
+        user_requests[user_id]["contact"] = text
+
+        username = message.from_user.username or "без username"
+        full_name = message.from_user.full_name or "без имени"
+        meeting_data = user_requests[user_id]
+
+        # Сохраняем как внутренний запрос типа «встреча»
+        request_data = {
+            "name": full_name,
+            "role": "запись на встречу",
+            "client": meeting_data.get("topic", ""),
+            "task": f"Тема: {meeting_data.get('topic', '')}. Удобное время: {meeting_data.get('time', '')}",
+            "contact": meeting_data.get("contact", ""),
+        }
+        sheet_status = await save_internal_request_to_google_sheets(request_data, username, user_id)
+
+        await message.answer(
+            "✅ Заявка на встречу отправлена.\n\n"
+            "С вами свяжутся для подтверждения и пришлют приглашение в календарь. "
+            "Если вопрос срочный — напишите ответственному напрямую.",
+            reply_markup=main_kb,
+        )
+
+        # Кликабельная ссылка на человека для быстрого ответа
+        if username and username != "без username":
+            tg_link = f'<a href="https://t.me/{h(username)}">@{h(username)}</a>'
+        else:
+            tg_link = f'<a href="tg://user?id={user_id}">написать</a>'
+
+        try:
+            await bot.send_message(
+                ADMIN_ID,
+                f"📅 <b>Запись на встречу из бота</b>\n\n"
+                f"👤 Имя: {h(full_name)}\n"
+                f"📝 Тема: {h(str(meeting_data.get('topic', '')))}\n"
+                f"🕒 Удобное время: {h(str(meeting_data.get('time', '')))}\n"
+                f"☎️ Контакт: {h(str(meeting_data.get('contact', '')))}\n"
+                f"🔗 Telegram: {tg_link}\n"
+                f"🧾 Таблица: {sheet_status}\n\n"
+                f"👉 Отправьте человеку приглашение в календарь.",
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
+        except Exception as e:
+            logger.warning("Admin notify error: %s", e)
+
+        user_states[user_id] = None
+        user_requests[user_id] = {}
+        return
+
+    # =====================================================
     # ГЛАВНОЕ МЕНЮ
     # =====================================================
 
@@ -2091,18 +2171,17 @@ async def handle_message(message: types.Message):
         )
         return
 
-    if text == "📅 Записаться в MTS Link":
-        if MTS_LINK_URL:
-            link_text = f"Ссылка на MTS Link:\n{MTS_LINK_URL}"
-        else:
-            link_text = "Ссылка на MTS Link пока не настроена. Добавьте MTS_LINK_URL в Render Environment."
+    if text == "📅 Записаться на встречу":
+        user_states[user_id] = "meeting_topic"
+        user_requests[user_id] = {}
 
         await message.answer(
-            "📅 <b>Консультация / обсуждение задачи</b>\n\n"
-            "Можно использовать MTS Link для разбора нестандартной клиентской задачи.\n\n"
-            f"{link_text}",
+            "📅 <b>Запись на встречу-консультацию</b>\n\n"
+            "Соберу заявку на встречу для разбора вашего вопроса — "
+            "после этого с вами свяжутся и пришлют приглашение в календарь.\n\n"
+            "Опишите коротко <b>тему встречи</b>: что хотите обсудить?\n"
+            "Например: «сложный кейс по доходимости для клиента из ритейла».",
             parse_mode="HTML",
-            reply_markup=main_kb,
         )
         return
 
