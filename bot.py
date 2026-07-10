@@ -103,6 +103,50 @@ MATERIALS = [
 
 
 # =========================================================
+# ССЫЛКИ НА МАТЕРИАЛЫ ПО ПРОДУКТАМ
+# =========================================================
+# Ключ — точное название продукта из services (поле "name").
+# presentation — ссылка на Sales Kit / презентацию (облако).
+# price — ссылка на прайс/бриф с ценами (облако).
+# Пустая строка "" означает «материал пока не добавлен» — бот сообщит об этом
+# и предложит запросить материал у эксперта. Заполняйте по мере готовности ссылок.
+MATERIAL_LINKS = {
+    "Brand Lift": {
+        "presentation": "https://disk.yandex.ru/i/fv6dqn29vZyi3Q",
+        "price": "",
+    },
+    "Конверсионный анализ": {
+        "presentation": "https://disk.yandex.ru/i/IwswmA18jDzYDA",
+        "price": "",
+    },
+    "Профилирование": {
+        "presentation": "",
+        "price": "",
+    },
+    "Анализ конкурентов": {
+        "presentation": "",
+        "price": "",
+    },
+    "Тепловая карта": {
+        "presentation": "",
+        "price": "",
+    },
+    "Аналитика наружной рекламы": {
+        "presentation": "https://disk.yandex.ru/i/F8Je5RcnOWTLhA",
+        "price": "https://disk.yandex.ru/i/5uySfXZu1q6JPg",
+    },
+    "ТВ-аналитика": {
+        "presentation": "https://disk.yandex.ru/i/OUkpUClXIRgKdA",
+        "price": "",
+    },
+    "Доходимость": {
+        "presentation": "https://disk.yandex.ru/i/Gyxw3PE1D6aBSw",
+        "price": "https://disk.yandex.ru/i/ibYDAZaGCx_zNw",
+    },
+}
+
+
+# =========================================================
 # ПРОДУКТЫ / УСЛУГИ
 # =========================================================
 
@@ -357,7 +401,7 @@ main_kb = ReplyKeyboardMarkup(
         [KeyboardButton(text="🚫 Что нельзя обещать"), KeyboardButton(text="📎 Материалы")],
         [KeyboardButton(text="💰 Цены и сроки"), KeyboardButton(text="🆚 Сравнить продукты")],
         [KeyboardButton(text="📅 Записаться в MTS Link")],
-        [KeyboardButton(text="📌 Передать нестандартный запрос")],
+        [KeyboardButton(text="📌 Нестандартный запрос")],
     ],
     resize_keyboard=True,
 )
@@ -365,6 +409,8 @@ main_kb = ReplyKeyboardMarkup(
 materials_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📎 Получить Sales Kit")],
+        [KeyboardButton(text="📊 Презентация по исследованию")],
+        [KeyboardButton(text="💰 Бриф с прайсом")],
         [KeyboardButton(text="📚 Что внутри материалов")],
         [KeyboardButton(text="⬅️ В главное меню")],
     ],
@@ -1586,6 +1632,52 @@ async def handle_message(message: types.Message):
         return
 
     # =====================================================
+    # ЗАПРОС МАТЕРИАЛОВ ПО ПРОДУКТУ (презентация / прайс)
+    # =====================================================
+
+    if user_states.get(user_id) in ("material_presentation", "material_pricing"):
+        state = user_states[user_id]
+        user_states[user_id] = None
+
+        link_key = "presentation" if state == "material_presentation" else "price"
+        kind = "презентация" if state == "material_presentation" else "прайс"
+
+        # Распознаем продукт по названию
+        service = find_service(text)
+
+        if not service:
+            await message.answer(
+                f"Не нашел продукт «{h(text.strip())}» в списке.\n\n"
+                "Проверьте название или посмотрите доступные продукты в разделе "
+                "«📊 Продукты и методологии».",
+                parse_mode="HTML",
+                reply_markup=materials_kb,
+            )
+            return
+
+        product_name = service["name"]
+        link = MATERIAL_LINKS.get(product_name, {}).get(link_key, "")
+
+        if link:
+            await message.answer(
+                f"📎 <b>{kind.capitalize()} — {h(product_name)}</b>\n\n{link}",
+                parse_mode="HTML",
+                reply_markup=main_kb,
+                disable_web_page_preview=False,
+            )
+        else:
+            # Ссылки пока нет — честно сообщаем и предлагаем запросить у эксперта
+            await message.answer(
+                f"По продукту «{h(product_name)}» {kind} пока не добавлен(а) в бота.\n\n"
+                "Можно запросить материал у эксперта через «📌 Нестандартный запрос» "
+                "или посмотреть ориентиры в разделе «💰 Цены и сроки».",
+                parse_mode="HTML",
+                reply_markup=main_kb,
+            )
+
+        return
+
+    # =====================================================
     # РЕЖИМ AI-ВОПРОСА
     # =====================================================
 
@@ -1731,6 +1823,12 @@ async def handle_message(message: types.Message):
             reply_markup=main_kb,
         )
 
+        # Кликабельная ссылка на человека для быстрого ответа
+        if username and username != "без username":
+            tg_link = f'<a href="https://t.me/{h(username)}">@{h(username)}</a>'
+        else:
+            tg_link = f'<a href="tg://user?id={user_id}">написать</a>'
+
         try:
             await bot.send_message(
                 ADMIN_ID,
@@ -1740,9 +1838,10 @@ async def handle_message(message: types.Message):
                 f"🏢 Клиент / категория: {h(str(request_data.get('client', '')))}\n"
                 f"📌 Задача: {h(str(request_data.get('task', '')))}\n"
                 f"☎️ Контакт: {h(str(request_data.get('contact', '')))}\n"
-                f"🔗 Telegram: @{h(username)}\n"
+                f"🔗 Telegram: {tg_link}\n"
                 f"🧾 Таблица: {sheet_status}",
                 parse_mode="HTML",
+                disable_web_page_preview=True,
             )
         except Exception as e:
             logger.warning("Admin notify error: %s", e)
@@ -1858,12 +1957,20 @@ async def handle_message(message: types.Message):
         )
         return
 
-    if text == "📌 Передать нестандартный запрос":
+    if text == "📌 Нестандартный запрос":
         start_internal_request_flow(user_id)
 
         await message.answer(
-            "Передадим нестандартный запрос эксперту.\n\n"
-            "Сначала напишите ваше имя."
+            "📝 <b>Нестандартный запрос эксперту</b>\n\n"
+            "Заполним заявку по шагам. Понадобится:\n"
+            "• ФИО\n"
+            "• Отдел / роль\n"
+            "• Клиент или категория\n"
+            "• Описание запроса\n"
+            "• Контакт для ответа\n\n"
+            "Заявка уйдёт на почту центра исследований и ответственному в Telegram.\n\n"
+            "Начнём. Напишите ваше <b>ФИО</b>:",
+            parse_mode="HTML",
         )
         return
 
@@ -1922,6 +2029,31 @@ async def handle_message(message: types.Message):
         except Exception as e:
             logger.warning("Admin notify error: %s", e)
 
+        return
+
+    if text == "📊 Презентация по исследованию":
+        user_states[user_id] = "material_presentation"
+        await message.answer(
+            "📊 По какому исследованию нужна презентация?\n\n"
+            "Напишите название продукта, например:\n"
+            "— Brand Lift\n"
+            "— Доходимость\n"
+            "— Аналитика наружной рекламы\n\n"
+            "Пришлю ссылку на презентацию (Sales Kit) по продукту.",
+            reply_markup=materials_kb,
+        )
+        return
+
+    if text == "💰 Бриф с прайсом":
+        user_states[user_id] = "material_pricing"
+        await message.answer(
+            "💰 По какому исследованию нужен прайс?\n\n"
+            "Напишите название продукта, например:\n"
+            "— Доходимость\n"
+            "— Аналитика наружной рекламы\n\n"
+            "Пришлю ссылку на прайс. Общие ориентиры по ценам есть в разделе «💰 Цены и сроки».",
+            reply_markup=materials_kb,
+        )
         return
 
     # =====================================================
